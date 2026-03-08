@@ -8,55 +8,16 @@ import re
 import smtplib
 import sys
 import xml.etree.ElementTree as ET
-from collections import Counter
+import uuid
 from dataclasses import dataclass
 from email.message import EmailMessage
 from html import escape
-from typing import Iterable
 from zoneinfo import ZoneInfo
 
 import requests
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
-
-COMMON_PROFILE_STOPWORDS = {
-    "about",
-    "across",
-    "agent",
-    "agents",
-    "also",
-    "and",
-    "approach",
-    "approaches",
-    "applications",
-    "based",
-    "being",
-    "between",
-    "both",
-    "focus",
-    "focused",
-    "focusing",
-    "for",
-    "from",
-    "into",
-    "language",
-    "large",
-    "model",
-    "models",
-    "paper",
-    "papers",
-    "research",
-    "study",
-    "system",
-    "systems",
-    "that",
-    "their",
-    "this",
-    "using",
-    "with",
-    "work",
-}
 
 
 @dataclass
@@ -176,34 +137,6 @@ def parse_args() -> argparse.Namespace:
 def normalize_research_profile(profile_raw: str) -> str:
     return " ".join(profile_raw.split())
 
-
-def extract_interest_terms(profile: str) -> list[str]:
-    terms: list[str] = []
-
-    for chunk in re.split(r"[.;\n]+", profile):
-        phrase = " ".join(chunk.split())
-        phrase_tokens = tokenize(phrase)
-        if 2 <= len(phrase_tokens) <= 8:
-            terms.append(phrase)
-
-    token_counts = Counter(
-        token
-        for token in tokenize(profile)
-        if len(token) >= 4 and token not in COMMON_PROFILE_STOPWORDS
-    )
-    for token, _ in token_counts.most_common(20):
-        terms.append(token)
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for term in terms:
-        clean = term.strip()
-        key = clean.lower()
-        if not clean or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(clean)
-    return deduped
 
 def parse_user_datetime(
     raw: str | None,
@@ -511,58 +444,6 @@ def extract_html_link(entry: ET.Element) -> str:
     return ""
 
 
-def tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.lower())
-
-
-def score_paper(paper: Paper, interests: Iterable[str]) -> tuple[int, list[str]]:
-    title = paper.title.lower()
-    summary = paper.summary.lower()
-    categories = " ".join(paper.categories).lower()
-    combined = f"{title} {summary} {categories}"
-    score = 0
-    matched: list[str] = []
-
-    for raw_interest in interests:
-        interest = raw_interest.strip().lower()
-        if not interest:
-            continue
-
-        unique_tokens = sorted({token for token in tokenize(interest) if len(token) >= 3})
-        phrase_in_title = interest in title
-        phrase_in_summary = interest in summary
-        phrase_in_categories = interest in categories
-        token_present_count = sum(1 for token in unique_tokens if token in combined)
-
-        required_tokens = 0
-        if unique_tokens:
-            required_tokens = min(2, len(unique_tokens))
-
-        if not (phrase_in_title or phrase_in_summary or phrase_in_categories):
-            if required_tokens > 0 and token_present_count < required_tokens:
-                continue
-
-        local_score = 0
-        if phrase_in_title:
-            local_score += 12
-        if phrase_in_categories:
-            local_score += 7
-        if phrase_in_summary:
-            local_score += 6 + min(summary.count(interest), 3)
-
-        for token in unique_tokens:
-            if token in title:
-                local_score += 2
-            if token in summary:
-                local_score += min(summary.count(token), 2)
-
-        if local_score > 0:
-            matched.append(raw_interest.strip())
-            score += local_score
-
-    return score, matched
-
-
 def summarize_abstract(text: str, max_sentences: int = 2, max_chars: int = 380) -> str:
     clean = " ".join(text.split())
     if not clean:
@@ -617,7 +498,6 @@ def extract_json_object(raw: str) -> dict:
 def recommend_with_llm_batch(
     papers: list[Paper],
     research_profile: str,
-    interest_terms: list[str],
     llm_model: str,
     llm_timeout: int,
 ) -> list[Recommendation]:
@@ -652,7 +532,6 @@ def recommend_with_llm_batch(
     user_payload = {
         "task": "Return all relevant papers from this batch and summarize each in 2 concise sentences.",
         "research_profile": research_profile,
-        "interest_terms_hint": interest_terms,
         "papers": serialized_candidates,
         "output_schema": {
             "recommended": [
@@ -675,7 +554,7 @@ def recommend_with_llm_batch(
 
     request_payload = {
         "model": llm_model,
-        "temperature": 0.2,
+        "temperature": 1.0,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -730,8 +609,6 @@ def recommend_with_llm_batch(
             score = 0.0
 
         matched_interests = normalize_str_list(item.get("matched_interests", []))
-        if not matched_interests:
-            _, matched_interests = score_paper(paper, interest_terms)
 
         summary = compact_text(str(item.get("summary", "")).strip(), 420)
         if not summary:
@@ -757,7 +634,6 @@ def recommend_with_llm_batch(
 def recommend_with_llm(
     papers: list[Paper],
     research_profile: str,
-    interest_terms: list[str],
     llm_model: str,
     llm_batch_size: int,
     llm_timeout: int,
@@ -775,7 +651,6 @@ def recommend_with_llm(
             recommend_with_llm_batch(
                 papers=batch,
                 research_profile=research_profile,
-                interest_terms=interest_terms,
                 llm_model=llm_model,
                 llm_timeout=llm_timeout,
             )
@@ -791,41 +666,9 @@ def recommend_with_llm(
     output.sort(key=lambda item: (item.score, item.paper.published), reverse=True)
     return output
 
-def recommend_with_local_fallback(
-    papers: list[Paper],
-    research_profile: str,
-    interest_terms: list[str],
-) -> list[Recommendation]:
-    if not papers:
-        return []
-
-    profile_focus = compact_text(research_profile, 160)
-    recommendations: list[Recommendation] = []
-    for paper in papers:
-        score, matched = score_paper(paper, interest_terms)
-        if score <= 0:
-            continue
-
-        profile_hint = ", ".join(matched[:3]) if matched else "topic overlap"
-        reason = f"Connected to your profile ({profile_focus}) via {profile_hint}."
-
-        recommendations.append(
-            Recommendation(
-                paper=paper,
-                score=float(score),
-                matched_interests=matched,
-                summary=summarize_abstract(paper.summary),
-                reason=reason,
-            )
-        )
-
-    recommendations.sort(key=lambda item: (item.score, item.paper.published), reverse=True)
-    return recommendations
-
 def recommend_and_summarize(
     papers: list[Paper],
     research_profile: str,
-    interest_terms: list[str],
     llm_model: str,
     llm_batch_size: int,
     llm_timeout: int,
@@ -838,7 +681,6 @@ def recommend_and_summarize(
             recommend_with_llm(
                 papers=papers,
                 research_profile=research_profile,
-                interest_terms=interest_terms,
                 llm_model=llm_model,
                 llm_batch_size=llm_batch_size,
                 llm_timeout=llm_timeout,
@@ -846,9 +688,8 @@ def recommend_and_summarize(
             "LLM",
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"LLM recommendation failed: {exc}. Falling back to local ranking.", file=sys.stderr)
-
-    return recommend_with_local_fallback(papers, research_profile, interest_terms), "Local fallback"
+        print(f"LLM recommendation failed: {exc}.", file=sys.stderr)
+        return [], "LLM unavailable"
 
 def format_score(score: float) -> str:
     if score.is_integer():
@@ -860,17 +701,14 @@ def render_reports(
     start_utc: dt.datetime,
     end_utc: dt.datetime,
     research_profile: str,
-    interest_terms: list[str],
     recommendations: list[Recommendation],
     method_label: str,
 ) -> tuple[str, str, str]:
     profile_text = compact_text(research_profile, 700)
-    terms_text = ", ".join(interest_terms[:25]) if interest_terms else "N/A"
 
     text_lines = [
         f"arXiv recommendations for {start_utc.isoformat()} to {end_utc.isoformat()}",
         f"Research profile: {profile_text}",
-        f"Extracted concepts: {terms_text}",
         f"Recommendation method: {method_label}",
         "",
     ]
@@ -879,7 +717,6 @@ def render_reports(
         "<h2>arXiv Recommendations</h2>",
         f"<p>Window: <code>{escape(start_utc.isoformat())}</code> to <code>{escape(end_utc.isoformat())}</code><br>",
         f"Research profile: {escape(profile_text)}<br>",
-        f"Extracted concepts: {escape(terms_text)}<br>",
         f"Recommendation method: {escape(method_label)}</p>",
         "<ol>",
     ]
@@ -889,7 +726,6 @@ def render_reports(
         "",
         f"- Window: `{start_utc.isoformat()}` to `{end_utc.isoformat()}`",
         f"- Research profile: {profile_text}",
-        f"- Extracted concepts: {terms_text}",
         f"- Recommendation method: {method_label}",
         "",
     ]
@@ -987,20 +823,72 @@ def send_email(message: EmailMessage) -> None:
         smtp.send_message(message)
 
 
-def default_output_path(start_utc: dt.datetime, end_utc: dt.datetime) -> str:
+def build_report_filename(
+    start_utc: dt.datetime,
+    end_utc: dt.datetime,
+    generated_utc: dt.datetime,
+    uid: str,
+) -> str:
     return (
-        f"arxiv_recommendations_{start_utc.strftime('%Y%m%dT%H%M')}_"
-        f"{end_utc.strftime('%Y%m%dT%H%M')}.md"
+        f"arxiv_recommendations_q{start_utc.strftime('%Y%m%dT%H%M%SZ')}_"
+        f"{end_utc.strftime('%Y%m%dT%H%M%SZ')}_"
+        f"gen{generated_utc.strftime('%Y%m%dT%H%M%SZ')}_{uid}.md"
     )
 
 
-def save_report(path: str, markdown_report: str) -> None:
-    directory = os.path.dirname(path)
+def default_output_path(start_utc: dt.datetime, end_utc: dt.datetime) -> str:
+    generated_utc = dt.datetime.now(dt.timezone.utc)
+    uid = uuid.uuid4().hex[:8]
+    filename = build_report_filename(start_utc, end_utc, generated_utc, uid)
+    return os.path.join("reports", filename)
+
+
+def resolve_output_path(raw_path: str, start_utc: dt.datetime, end_utc: dt.datetime) -> str:
+    generated_utc = dt.datetime.now(dt.timezone.utc)
+    uid = uuid.uuid4().hex[:8]
+    auto_filename = build_report_filename(start_utc, end_utc, generated_utc, uid)
+
+    cleaned = raw_path.strip()
+    if not cleaned:
+        return os.path.join("reports", auto_filename)
+
+    expanded = os.path.expanduser(cleaned)
+    basename = os.path.basename(expanded.rstrip("/\\"))
+    ext = os.path.splitext(basename)[1]
+    is_dir_hint = (
+        cleaned.endswith("/")
+        or cleaned.endswith("\\")
+        or os.path.isdir(expanded)
+        or ext == ""
+    )
+
+    if is_dir_hint:
+        return os.path.join(expanded, auto_filename)
+
+    return expanded
+
+
+def save_report(path: str, markdown_report: str, start_utc: dt.datetime, end_utc: dt.datetime) -> str:
+    target = resolve_output_path(path, start_utc, end_utc)
+    directory = os.path.dirname(target)
     if directory:
         os.makedirs(directory, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as output_file:
+
+    base, ext = os.path.splitext(target)
+    if not ext:
+        ext = ".md"
+        target = base + ext
+
+    candidate = target
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = f"{base}_{counter}{ext}"
+        counter += 1
+
+    with open(candidate, "w", encoding="utf-8") as output_file:
         output_file.write(markdown_report)
 
+    return candidate
 
 def main() -> int:
     load_dotenv()
@@ -1010,8 +898,6 @@ def main() -> int:
     if not research_profile:
         print("No research profile provided. Set --research-profile or RESEARCH_PROFILE.", file=sys.stderr)
         return 1
-
-    interest_terms = extract_interest_terms(research_profile)
 
     try:
         start_utc, end_utc = compute_time_window(
@@ -1034,7 +920,6 @@ def main() -> int:
     recommendations, method_label = recommend_and_summarize(
         papers=papers,
         research_profile=research_profile,
-        interest_terms=interest_terms,
         llm_model=args.llm_model,
         llm_batch_size=max(1, args.llm_batch_size),
         llm_timeout=max(5, args.llm_timeout),
@@ -1044,15 +929,14 @@ def main() -> int:
         start_utc=start_utc,
         end_utc=end_utc,
         research_profile=research_profile,
-        interest_terms=interest_terms,
         recommendations=recommendations,
         method_label=method_label,
     )
 
     if not args.to:
         output_path = args.output or default_output_path(start_utc, end_utc)
-        save_report(output_path, markdown_report)
-        print(f"No email recipient provided. Saved recommendations to {output_path}.")
+        saved_path = save_report(output_path, markdown_report, start_utc, end_utc)
+        print(f"No email recipient provided. Saved recommendations to {saved_path}.")
         return 0
 
     message = build_email(args.to, start_utc, end_utc, text_report, html_report)
@@ -1068,14 +952,31 @@ def main() -> int:
         print(f"Sent {len(recommendations)} recommendations to {args.to}.")
 
     if args.output:
-        save_report(args.output, markdown_report)
-        print(f"Saved recommendations to {args.output}.")
+        saved_path = save_report(args.output, markdown_report, start_utc, end_utc)
+        print(f"Saved recommendations to {saved_path}.")
 
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -22,7 +22,7 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 - `RESEARCH_PROFILE`: paragraph self-introduction of your research interests
 - `APP_TIMEZONE`: timezone for default date window and relative time resolution
 - `EMAIL_TO`: recipient email (optional)
-- `OUTPUT_PATH`: report path (optional)
+- `OUTPUT_PATH`: report file path or directory (optional, default `./reports`)
 
 ### LLM settings
 - `OPENAI_API_KEY`: API key (required for LLM mode)
@@ -49,6 +49,7 @@ Examples:
 
 ## Usage
 ### 1) Save report file (no email)
+By default, reports are saved under `./reports` using a robust filename with query window, generation time, and short UID.
 
 ```bash
 conda run -n py310 python app.py \
@@ -74,7 +75,7 @@ conda run -n py310 python app.py \
 - `--timezone`: IANA timezone, default `UTC`
 - `--max-results`: max arXiv papers fetched from the window, default `200`
 - `--to`: recipient email; if omitted, app saves report file
-- `--output`: output report file path
+- `--output`: output report file path or directory
 - `--llm-model`: LLM model for recommendations
 - `--time-parse-model`: LLM model for time parsing
 - `--llm-batch-size`: number of papers per LLM batch
@@ -86,4 +87,8 @@ conda run -n py310 python app.py \
 - Recommendations include all papers judged relevant in the fetched window.
 - Every recommendation includes a reason that explains the connection to your research profile.
 - If LLM time parsing fails, the app falls back to local flexible parsing for common formats.
-- If recommendation LLM calls fail, the app falls back to local profile-term matching.
+- If recommendation LLM calls fail, the app reports no recommendations (LLM-only relevance mode).
+- Default report filename format is `arxiv_recommendations_q<start>_<end>_gen<time>_<uid>.md`.
+
+
+
