@@ -112,24 +112,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--research-profile",
         help="Paragraph describing your research background, topics, and goals.",
-        default=os.getenv("RESEARCH_PROFILE", os.getenv("USER_INTERESTS", "")),
-    )
-    parser.add_argument(
-        "--interests",
-        help="Legacy comma-separated keyword interests. Used as hint together with --research-profile.",
-        default="",
+        default=os.getenv("RESEARCH_PROFILE", ""),
     )
     parser.add_argument(
         "--start",
-        help="Start datetime in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM). Defaults to today's 00:00 in --timezone.",
+        help="Flexible start time (e.g. 2026.03.04, March 4 2026, last Friday 9am). Defaults to today's 00:00 in --timezone.",
     )
     parser.add_argument(
         "--end",
-        help="End datetime in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM). Defaults to now in --timezone.",
+        help="Flexible end time (e.g. now, today 23:59, 2026/03/08 18:30). Defaults to now in --timezone.",
     )
     parser.add_argument(
         "--timezone",
-        help="Timezone name used for --start/--end parsing and default range (e.g. UTC, America/New_York).",
+        help="Timezone name used for date parsing and defaults (e.g. UTC, America/New_York).",
         default=os.getenv("APP_TIMEZONE", "UTC"),
     )
     parser.add_argument(
@@ -154,6 +149,11 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     )
     parser.add_argument(
+        "--time-parse-model",
+        help="LLM model used to normalize flexible time expressions.",
+        default=os.getenv("TIME_PARSE_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
+    )
+    parser.add_argument(
         "--llm-batch-size",
         type=int,
         default=int_env("LLM_BATCH_SIZE", 40),
@@ -163,7 +163,7 @@ def parse_args() -> argparse.Namespace:
         "--llm-timeout",
         type=int,
         default=int_env("LLM_TIMEOUT", 60),
-        help="Timeout (seconds) for the LLM API request.",
+        help="Timeout (seconds) for LLM API requests.",
     )
     parser.add_argument(
         "--dry-run",
@@ -173,22 +173,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def parse_interests(raw: str) -> list[str]:
-    interests = [part.strip() for part in raw.split(",")]
-    return [value for value in interests if value]
+def normalize_research_profile(profile_raw: str) -> str:
+    return " ".join(profile_raw.split())
 
 
-def normalize_research_profile(profile_raw: str, keyword_raw: str) -> str:
-    profile = " ".join(profile_raw.split())
-    if profile:
-        return profile
-    keywords = parse_interests(keyword_raw)
-    return ", ".join(keywords)
-
-
-def extract_interest_terms(profile: str, keyword_raw: str) -> list[str]:
+def extract_interest_terms(profile: str) -> list[str]:
     terms: list[str] = []
-    terms.extend(parse_interests(keyword_raw))
 
     for chunk in re.split(r"[.;\n]+", profile):
         phrase = " ".join(chunk.split())
@@ -215,37 +205,228 @@ def extract_interest_terms(profile: str, keyword_raw: str) -> list[str]:
         deduped.append(clean)
     return deduped
 
-def parse_user_datetime(raw: str | None, tz: ZoneInfo) -> dt.datetime | None:
+def parse_user_datetime(
+    raw: str | None,
+    tz: ZoneInfo,
+    now_local: dt.datetime,
+    for_end: bool = False,
+) -> dt.datetime | None:
     if raw is None:
         return None
+
+    normalized = re.sub(r"\s+", " ", raw.strip())
+    if not normalized:
+        return None
+
+    low = normalized.lower()
+    if low in {"now", "right now"}:
+        return now_local
+    if low == "today":
+        return now_local.replace(hour=23, minute=59, second=59, microsecond=0) if for_end else now_local.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    if low == "yesterday":
+        base = now_local - dt.timedelta(days=1)
+        return base.replace(hour=23, minute=59, second=59, microsecond=0) if for_end else base.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    if low == "tomorrow":
+        base = now_local + dt.timedelta(days=1)
+        return base.replace(hour=23, minute=59, second=59, microsecond=0) if for_end else base.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    cleaned = re.sub(
+        r"^(from|since|start|starting|begin|beginning|to|until|till|end|ending)\s+",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned.replace(",", " ").replace(" at ", " ")).strip()
+
+    iso_candidate = cleaned.replace("Z", "+00:00")
     try:
-        parsed = dt.datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValueError(f"Invalid datetime '{raw}'. Use ISO format like YYYY-MM-DDTHH:MM.") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=tz)
-    return parsed
+        parsed = dt.datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        parsed = None
+
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=tz)
+        return parsed.astimezone(tz)
+
+    datetime_formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y.%m.%d %H:%M:%S",
+        "%Y.%m.%d %H:%M",
+        "%Y%m%d%H%M",
+        "%Y%m%d %H%M",
+        "%d %b %Y %H:%M",
+        "%d %B %Y %H:%M",
+        "%b %d %Y %H:%M",
+        "%B %d %Y %H:%M",
+    ]
+    for fmt in datetime_formats:
+        try:
+            parsed = dt.datetime.strptime(cleaned, fmt)
+            return parsed.replace(tzinfo=tz)
+        except ValueError:
+            continue
+
+    date_formats = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%Y%m%d",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%b %d %Y",
+        "%B %d %Y",
+    ]
+    for fmt in date_formats:
+        try:
+            parsed_date = dt.datetime.strptime(cleaned, fmt)
+            parsed = parsed_date.replace(tzinfo=tz)
+            if for_end:
+                parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=0)
+            return parsed
+        except ValueError:
+            continue
+
+    return None
+
+
+def normalize_times_with_llm(
+    start_raw: str | None,
+    end_raw: str | None,
+    tz_name: str,
+    reference_now: dt.datetime,
+    llm_model: str,
+    llm_timeout: int,
+) -> tuple[str | None, str | None]:
+    if not (start_raw or end_raw):
+        return None, None
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is not set for time parsing.")
+
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    endpoint = f"{base_url}/chat/completions"
+
+    system_prompt = (
+        "You normalize user-provided time expressions to strict ISO 8601 datetimes. "
+        "Use the provided reference_now as the authoritative current time. "
+        "Return JSON only with keys start and end."
+    )
+    user_payload = {
+        "timezone": tz_name,
+        "reference_now": reference_now.isoformat(),
+        "reference_date": reference_now.strftime("%Y-%m-%d"),
+        "reference_weekday": reference_now.strftime("%A"),
+        "reference_unix": int(reference_now.timestamp()),
+        "reference_utc_offset": reference_now.strftime("%z"),
+        "start_input": start_raw,
+        "end_input": end_raw,
+        "rules": [
+            "Output format: YYYY-MM-DDTHH:MM:SS+HH:MM.",
+            "If input is date-only and refers to start, set time to 00:00:00.",
+            "If input is date-only and refers to end, set time to 23:59:59.",
+            "Resolve relative terms (today, yesterday, last Friday, now) using reference_now and timezone.",
+            "If a side is missing, return null for that side.",
+        ],
+    }
+
+    request_payload = {
+        "model": llm_model,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+    }
+
+    response = requests.post(
+        endpoint,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=request_payload,
+        timeout=max(5, llm_timeout),
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("Time parser LLM response has no choices.")
+
+    message = choices[0].get("message", {})
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Time parser LLM response has no text content.")
+
+    parsed = extract_json_object(content)
+
+    start_value = parsed.get("start")
+    end_value = parsed.get("end")
+
+    normalized_start = str(start_value).strip() if start_value is not None else None
+    normalized_end = str(end_value).strip() if end_value is not None else None
+
+    if normalized_start == "":
+        normalized_start = None
+    if normalized_end == "":
+        normalized_end = None
+
+    return normalized_start, normalized_end
 
 
 def compute_time_window(
     start_raw: str | None,
     end_raw: str | None,
     tz_name: str,
+    time_parse_model: str,
+    llm_timeout: int,
 ) -> tuple[dt.datetime, dt.datetime]:
     tz = ZoneInfo(tz_name)
     now_local = dt.datetime.now(tz)
-    start_local = parse_user_datetime(start_raw, tz)
-    end_local = parse_user_datetime(end_raw, tz)
+
+    llm_start_raw: str | None = None
+    llm_end_raw: str | None = None
+    if (start_raw and start_raw.strip()) or (end_raw and end_raw.strip()):
+        try:
+            llm_start_raw, llm_end_raw = normalize_times_with_llm(
+                start_raw=start_raw,
+                end_raw=end_raw,
+                tz_name=tz_name,
+                reference_now=now_local,
+                llm_model=time_parse_model,
+                llm_timeout=llm_timeout,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"LLM time parsing failed: {exc}. Falling back to local parsing.", file=sys.stderr)
+
+    start_source = llm_start_raw if llm_start_raw is not None else start_raw
+    end_source = llm_end_raw if llm_end_raw is not None else end_raw
+
+    start_local = parse_user_datetime(start_source, tz, now_local, for_end=False)
+    end_local = parse_user_datetime(end_source, tz, now_local, for_end=True)
 
     if start_local is None:
         start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     if end_local is None:
         end_local = now_local
+
     if end_local <= start_local:
         raise ValueError("End time must be after start time.")
 
     return start_local.astimezone(dt.timezone.utc), end_local.astimezone(dt.timezone.utc)
-
 
 def datetime_to_arxiv(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).strftime("%Y%m%d%H%M")
@@ -825,15 +1006,21 @@ def main() -> int:
     load_dotenv()
     args = parse_args()
 
-    research_profile = normalize_research_profile(args.research_profile, args.interests)
+    research_profile = normalize_research_profile(args.research_profile)
     if not research_profile:
         print("No research profile provided. Set --research-profile or RESEARCH_PROFILE.", file=sys.stderr)
         return 1
 
-    interest_terms = extract_interest_terms(research_profile, args.interests)
+    interest_terms = extract_interest_terms(research_profile)
 
     try:
-        start_utc, end_utc = compute_time_window(args.start, args.end, args.timezone)
+        start_utc, end_utc = compute_time_window(
+            start_raw=args.start,
+            end_raw=args.end,
+            tz_name=args.timezone,
+            time_parse_model=args.time_parse_model,
+            llm_timeout=max(5, args.llm_timeout),
+        )
     except Exception as exc:  # noqa: BLE001
         print(f"Invalid time settings: {exc}", file=sys.stderr)
         return 1
@@ -889,6 +1076,12 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
 
 
 
