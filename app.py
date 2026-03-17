@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import datetime as dt
@@ -35,6 +35,8 @@ class Paper:
 @dataclass
 class Recommendation:
     paper: Paper
+    title_zh: str
+    abstract_zh: str
     score: float
     matched_interests: list[str]
     summary: str
@@ -77,11 +79,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--start",
-        help="Flexible start time (e.g. 2026.03.04, March 4 2026, last Friday 9am). Defaults to today's 00:00 in --timezone.",
+        help="Flexible start time (e.g. 2026.03.04, March 4 2026, last Friday 9am). If both --start/--end are omitted, defaults to yesterday 00:00:00 in --timezone.",
     )
     parser.add_argument(
         "--end",
-        help="Flexible end time (e.g. now, today 23:59, 2026/03/08 18:30). Defaults to now in --timezone.",
+        help="Flexible end time (e.g. now, today 23:59, 2026/03/08 18:30). If both --start/--end are omitted, defaults to yesterday 23:59:59 in --timezone.",
     )
     parser.add_argument(
         "--timezone",
@@ -351,10 +353,15 @@ def compute_time_window(
     start_local = parse_user_datetime(start_source, tz, now_local, for_end=False)
     end_local = parse_user_datetime(end_source, tz, now_local, for_end=True)
 
-    if start_local is None:
-        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    if end_local is None:
-        end_local = now_local
+    if start_local is None and end_local is None:
+        yesterday = now_local - dt.timedelta(days=1)
+        start_local = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_local = yesterday.replace(hour=23, minute=59, second=59, microsecond=0)
+    else:
+        if end_local is None:
+            end_local = now_local
+        if start_local is None:
+            start_local = end_local - dt.timedelta(hours=24)
 
     if end_local <= start_local:
         raise ValueError("End time must be after start time.")
@@ -540,7 +547,9 @@ def recommend_with_llm_batch(
                     "score": "number between 0 and 100",
                     "matched_interests": ["matched concepts from research profile"],
                     "reason": "explicit connection between this paper and the research profile",
-                    "summary": "2-sentence summary",
+                    "summary": "2-sentence summary in English",
+                    "title_zh": "Chinese title (Simplified Chinese)",
+                    "abstract_zh": "Chinese abstract summary in 2-3 sentences (Simplified Chinese)",
                 }
             ]
         },
@@ -549,6 +558,7 @@ def recommend_with_llm_batch(
             "Return every relevant paper in this batch, not just top results.",
             "Exclude papers that are not relevant to the research profile.",
             "The reason must explicitly mention how the paper connects to the research profile.",
+            "title_zh and abstract_zh must be written in Simplified Chinese.",
         ],
     }
 
@@ -618,10 +628,17 @@ def recommend_with_llm_batch(
         if not reason:
             hint = ", ".join(matched_interests[:3]) if matched_interests else "profile overlap"
             reason = f"Connected to your research profile through {hint}."
-
+        title_zh = compact_text(str(item.get("title_zh", "")).strip(), 280)
+        if not title_zh:
+            title_zh = f"\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u6807\u9898\uff09{paper.title}"
+        abstract_zh = compact_text(str(item.get("abstract_zh", "")).strip(), 520)
+        if not abstract_zh:
+            abstract_zh = "\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u6458\u8981\uff09"
         recommendations.append(
             Recommendation(
                 paper=paper,
+                title_zh=title_zh,
+                abstract_zh=abstract_zh,
                 score=score,
                 matched_interests=matched_interests,
                 summary=summary,
@@ -744,12 +761,14 @@ def render_reports(
         text_lines.extend(
             [
                 f"{idx}. {paper.title}",
+                f"   Chinese title: {recommendation.title_zh}",
                 f"   Authors: {authors_text}",
                 f"   Published: {paper.published.isoformat()}",
                 f"   Relevance score: {score_text}",
                 f"   Matched concepts: {matched_text}",
                 f"   Why selected: {recommendation.reason}",
                 f"   Summary: {recommendation.summary}",
+                f"   Chinese abstract: {recommendation.abstract_zh}",
                 f"   URL: {paper.link}",
                 "",
             ]
@@ -758,12 +777,14 @@ def render_reports(
         html_blocks.append(
             "<li>"
             f"<p><strong>{escape(paper.title)}</strong><br>"
+            f"Chinese title: {escape(recommendation.title_zh)}<br>"
             f"Authors: {escape(authors_text)}<br>"
             f"Published: {escape(paper.published.isoformat())}<br>"
             f"Relevance score: {escape(score_text)}<br>"
             f"Matched concepts: {escape(matched_text)}<br>"
             f"Why selected: {escape(recommendation.reason)}<br>"
             f"Summary: {escape(recommendation.summary)}<br>"
+            f"Chinese abstract: {escape(recommendation.abstract_zh)}<br>"
             f"URL: <a href='{escape(paper.link)}'>{escape(paper.link)}</a></p>"
             "</li>"
         )
@@ -771,12 +792,14 @@ def render_reports(
         markdown_lines.extend(
             [
                 f"## {idx}. {paper.title}",
+                f"- Chinese title: {recommendation.title_zh}",
                 f"- Authors: {authors_text}",
                 f"- Published: {paper.published.isoformat()}",
                 f"- Relevance score: {score_text}",
                 f"- Matched concepts: {matched_text}",
                 f"- Why selected: {recommendation.reason}",
                 f"- Summary: {recommendation.summary}",
+                f"- Chinese abstract: {recommendation.abstract_zh}",
                 f"- URL: {paper.link}",
                 "",
             ]
@@ -890,6 +913,99 @@ def save_report(path: str, markdown_report: str, start_utc: dt.datetime, end_utc
 
     return candidate
 
+def has_explicit_time_window(start_raw: str | None, end_raw: str | None) -> bool:
+    return bool((start_raw and start_raw.strip()) or (end_raw and end_raw.strip()))
+
+def build_recent_fallback_recommendations(papers: list[Paper]) -> list[Recommendation]:
+    # Keep the full fetched set so no potentially useful recent paper is dropped.
+    ordered = sorted(papers, key=lambda item: item.published, reverse=True)
+    output: list[Recommendation] = []
+    for paper in ordered:
+        output.append(
+            Recommendation(
+                paper=paper,
+                title_zh=f"\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u6807\u9898\uff09{paper.title}",
+                abstract_zh="\uff08\u81ea\u52a8\u515c\u5e95\uff09\u5f53\u524d\u672a\u83b7\u5f97LLM\u4e2d\u6587\u6458\u8981\uff0c\u8bf7\u53c2\u8003\u82f1\u6587\u6458\u8981\u3002",
+                score=0.0,
+                matched_interests=[],
+                summary=summarize_abstract(paper.summary),
+                reason=(
+                    "Fallback recent-paper mode: the LLM returned no confident relevance match, "
+                    "so this newly submitted paper is included for daily tracking."
+                ),
+            )
+        )
+    return output
+
+def auto_backfill_default_run(
+    start_utc: dt.datetime,
+    end_utc: dt.datetime,
+    initial_papers: list[Paper],
+    initial_recommendations: list[Recommendation],
+    initial_method: str,
+    research_profile: str,
+    llm_model: str,
+    llm_batch_size: int,
+    llm_timeout: int,
+    max_results: int,
+) -> tuple[dt.datetime, list[Paper], list[Recommendation], str]:
+    if initial_recommendations:
+        return start_utc, initial_papers, initial_recommendations, initial_method
+    fallback_papers = initial_papers[:] if initial_papers else []
+    fallback_start = start_utc
+    fallback_days = 1
+    for lookback_days in [2, 3, 5, 7, 14]:
+        candidate_start = end_utc - dt.timedelta(days=lookback_days) + dt.timedelta(seconds=1)
+        if candidate_start >= start_utc:
+            continue
+        try:
+            candidate_papers = fetch_arxiv_papers(candidate_start, end_utc, max_results)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Auto-backfill fetch failed for {lookback_days} days: {exc}", file=sys.stderr)
+            continue
+        if not candidate_papers:
+            continue
+        if not fallback_papers:
+            fallback_papers = candidate_papers
+            fallback_start = candidate_start
+            fallback_days = lookback_days
+        candidate_recommendations, candidate_method = recommend_and_summarize(
+            papers=candidate_papers,
+            research_profile=research_profile,
+            llm_model=llm_model,
+            llm_batch_size=llm_batch_size,
+            llm_timeout=llm_timeout,
+        )
+        if candidate_recommendations:
+            print(
+                (
+                    "Auto-backfill expanded default run to "
+                    f"{lookback_days} day(s) and found {len(candidate_recommendations)} recommendation(s)."
+                ),
+                file=sys.stderr,
+            )
+            return (
+                candidate_start,
+                candidate_papers,
+                candidate_recommendations,
+                f"{candidate_method} (auto-backfill {lookback_days}d)",
+            )
+    if fallback_papers:
+        print(
+            (
+                "Auto-backfill enabled recent fallback recommendations because "
+                "LLM returned no relevant papers in the default run."
+            ),
+            file=sys.stderr,
+        )
+        return (
+            fallback_start,
+            fallback_papers,
+            build_recent_fallback_recommendations(fallback_papers),
+            f"Recent fallback ({fallback_days}d window)",
+        )
+    return start_utc, initial_papers, initial_recommendations, initial_method
+
 def main() -> int:
     load_dotenv()
     args = parse_args()
@@ -899,13 +1015,16 @@ def main() -> int:
         print("No research profile provided. Set --research-profile or RESEARCH_PROFILE.", file=sys.stderr)
         return 1
 
+    explicit_time_window = has_explicit_time_window(args.start, args.end)
+    llm_batch_size = max(1, args.llm_batch_size)
+    llm_timeout = max(5, args.llm_timeout)
     try:
         start_utc, end_utc = compute_time_window(
             start_raw=args.start,
             end_raw=args.end,
             tz_name=args.timezone,
             time_parse_model=args.time_parse_model,
-            llm_timeout=max(5, args.llm_timeout),
+            llm_timeout=llm_timeout,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Invalid time settings: {exc}", file=sys.stderr)
@@ -921,9 +1040,22 @@ def main() -> int:
         papers=papers,
         research_profile=research_profile,
         llm_model=args.llm_model,
-        llm_batch_size=max(1, args.llm_batch_size),
-        llm_timeout=max(5, args.llm_timeout),
+        llm_batch_size=llm_batch_size,
+        llm_timeout=llm_timeout,
     )
+    if not explicit_time_window and not recommendations:
+        start_utc, papers, recommendations, method_label = auto_backfill_default_run(
+            start_utc=start_utc,
+            end_utc=end_utc,
+            initial_papers=papers,
+            initial_recommendations=recommendations,
+            initial_method=method_label,
+            research_profile=research_profile,
+            llm_model=args.llm_model,
+            llm_batch_size=llm_batch_size,
+            llm_timeout=llm_timeout,
+            max_results=args.max_results,
+        )
 
     text_report, html_report, markdown_report = render_reports(
         start_utc=start_utc,
@@ -960,6 +1092,17 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1,8 +1,8 @@
-# arXiv Recommendation App
+﻿# arXiv Recommendation App
 
 This app does three things:
 1. Fetches new arXiv papers for a start/end time window.
-2. Uses an LLM to recommend relevant papers from your research-profile paragraph and summarize them.
+2. Uses an LLM to recommend relevant papers from your research-profile paragraph, summarize them, and include Chinese title/abstract fields.
 3. Includes explicit "why this matches your research" reasons, then emails results or saves a report file.
 
 ## Requirements
@@ -37,6 +37,7 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 
 ## Flexible Time Parsing
 You can pass natural time expressions for `--start` and `--end`.
+If both are omitted, the app defaults to yesterday in your timezone (`start=yesterday 00:00:00`, `end=yesterday 23:59:59`). If that raw run returns no recommendations, the app auto-backfills recent windows (2/3/5/7/14 days) to reduce empty daily output.
 The app calls an LLM to normalize them into ISO datetimes and provides explicit context:
 - current reference timestamp (`reference_now`)
 - reference date and weekday
@@ -70,8 +71,8 @@ conda run -n py310 python app.py \
 
 ## CLI Options
 - `--research-profile`: paragraph self-introduction for recommendation grounding
-- `--start`: flexible start time expression
-- `--end`: flexible end time expression
+- `--start`: flexible start time expression (default when both omitted: yesterday 00:00:00 in `--timezone`)
+- `--end`: flexible end time expression (default when both omitted: yesterday 23:59:59 in `--timezone`)
 - `--timezone`: IANA timezone, default `UTC`
 - `--max-results`: max arXiv papers fetched from the window, default `200`
 - `--to`: recipient email; if omitted, app saves report file
@@ -84,11 +85,13 @@ conda run -n py310 python app.py \
 
 ## Notes
 - arXiv query uses `submittedDate` and sorts by newest first.
-- Recommendations include all papers judged relevant in the fetched window.
+- Recommendations include all papers judged relevant in the fetched window, and each recommendation includes `Chinese title` and `Chinese abstract` fields.
 - Every recommendation includes a reason that explains the connection to your research profile.
 - If LLM time parsing fails, the app falls back to local flexible parsing for common formats.
-- If recommendation LLM calls fail, the app reports no recommendations (LLM-only relevance mode).
+- If recommendation LLM calls fail (or return no matches) during raw `python app.py`, the app uses auto-backfill and then a recent-paper fallback mode.
 - Default report filename format is `arxiv_recommendations_q<start>_<end>_gen<time>_<uid>.md`.
+
+
 
 
 
