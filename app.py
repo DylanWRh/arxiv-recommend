@@ -53,9 +53,18 @@ def int_env(name: str, default: int) -> int:
         return default
 
 
+def str_env(name: str, default: str = "") -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip()
+    return value if value else default
+
+
 def load_dotenv(path: str = ".env") -> None:
     if not os.path.exists(path):
         return
+    parsed: dict[str, str] = {}
     with open(path, encoding="utf-8") as env_file:
         for line in env_file:
             raw = line.strip()
@@ -64,8 +73,11 @@ def load_dotenv(path: str = ".env") -> None:
             key, value = raw.split("=", 1)
             key = key.strip()
             value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
+            if key:
+                parsed[key] = value
+    for key, value in parsed.items():
+        if not str_env(key):
+            os.environ[key] = value
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--research-profile",
         help="Paragraph describing your research background, topics, and goals.",
-        default=os.getenv("RESEARCH_PROFILE", ""),
+        default=str_env("RESEARCH_PROFILE", ""),
     )
     parser.add_argument(
         "--start",
@@ -88,7 +100,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timezone",
         help="Timezone name used for date parsing and defaults (e.g. UTC, America/New_York).",
-        default=os.getenv("APP_TIMEZONE", "UTC"),
+        default=str_env("APP_TIMEZONE", "UTC"),
     )
     parser.add_argument(
         "--max-results",
@@ -99,22 +111,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--to",
         help="Recipient email. Defaults to EMAIL_TO from environment. If empty, report is saved to file.",
-        default=os.getenv("EMAIL_TO", ""),
+        default=str_env("EMAIL_TO", ""),
     )
     parser.add_argument(
         "--output",
         help="Output file path for saved recommendations report.",
-        default=os.getenv("OUTPUT_PATH", ""),
+        default=str_env("OUTPUT_PATH", ""),
     )
     parser.add_argument(
         "--llm-model",
         help="LLM model used for recommendation and summarization.",
-        default=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        default=str_env("OPENAI_MODEL", "gpt-4o-mini"),
     )
     parser.add_argument(
         "--time-parse-model",
         help="LLM model used to normalize flexible time expressions.",
-        default=os.getenv("TIME_PARSE_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")),
+        default=str_env("TIME_PARSE_MODEL", str_env("OPENAI_MODEL", "gpt-4o-mini")),
     )
     parser.add_argument(
         "--llm-batch-size",
@@ -245,11 +257,11 @@ def normalize_times_with_llm(
     if not (start_raw or end_raw):
         return None, None
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = str_env("OPENAI_API_KEY", "")
     if not api_key:
         raise ValueError("OPENAI_API_KEY is not set for time parsing.")
 
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    base_url = str_env("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     endpoint = f"{base_url}/chat/completions"
 
     system_prompt = (
@@ -511,11 +523,11 @@ def recommend_with_llm_batch(
     if not papers:
         return []
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = str_env("OPENAI_API_KEY", "")
     if not api_key:
         raise ValueError("OPENAI_API_KEY is not set.")
 
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    base_url = str_env("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     endpoint = f"{base_url}/chat/completions"
 
     paper_map = {paper.paper_id: paper for paper in papers}
@@ -816,7 +828,7 @@ def build_email(
     html_report: str,
 ) -> EmailMessage:
     msg = EmailMessage()
-    sender = os.getenv("EMAIL_FROM", os.getenv("SMTP_USER", "noreply@example.com"))
+    sender = str_env("EMAIL_FROM", str_env("SMTP_USER", "noreply@example.com"))
     msg["From"] = sender
     msg["To"] = recipient
     msg["Subject"] = (
@@ -828,13 +840,13 @@ def build_email(
 
 
 def send_email(message: EmailMessage) -> None:
-    host = os.getenv("SMTP_HOST")
+    host = str_env("SMTP_HOST")
     if not host:
         raise ValueError("SMTP_HOST is not set.")
-    port = int(os.getenv("SMTP_PORT", "587"))
-    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
-    username = os.getenv("SMTP_USER", "")
-    password = os.getenv("SMTP_PASS", "")
+    port = int(str_env("SMTP_PORT", "587"))
+    use_tls = str_env("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
+    username = str_env("SMTP_USER", "")
+    password = str_env("SMTP_PASS", "")
 
     with smtplib.SMTP(host, port, timeout=30) as smtp:
         smtp.ehlo()
@@ -1092,57 +1104,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

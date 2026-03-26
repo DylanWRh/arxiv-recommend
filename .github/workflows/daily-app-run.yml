@@ -12,23 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      RESEARCH_PROFILE: ${{ vars.RESEARCH_PROFILE }}
-      APP_TIMEZONE: ${{ vars.APP_TIMEZONE }}
-      EMAIL_TO: ${{ secrets.EMAIL_TO }}
-      OUTPUT_PATH: ${{ vars.OUTPUT_PATH }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-      TIME_PARSE_MODEL: ${{ vars.TIME_PARSE_MODEL }}
-      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
-      LLM_BATCH_SIZE: ${{ vars.LLM_BATCH_SIZE }}
-      LLM_TIMEOUT: ${{ vars.LLM_TIMEOUT }}
-      SMTP_HOST: ${{ vars.SMTP_HOST }}
-      SMTP_PORT: ${{ vars.SMTP_PORT }}
-      SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
-      SMTP_USER: ${{ vars.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      EMAIL_FROM: ${{ vars.EMAIL_FROM }}
 
     steps:
       - uses: actions/checkout@v4
@@ -42,15 +25,36 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Require private recipient for scheduled runs
-        if: github.event_name == 'schedule' && env.EMAIL_TO == ''
+        if: github.event_name == 'schedule'
+        env:
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
-          echo "Set the EMAIL_TO secret before enabling scheduled delivery."
-          exit 1
+          if [ -z "$EMAIL_TO" ]; then
+            echo "Set the EMAIL_TO secret before enabling scheduled delivery."
+            exit 1
+          fi
 
       - name: Build .env
         shell: bash
+        env:
+          RESEARCH_PROFILE: ${{ vars.RESEARCH_PROFILE }}
+          APP_TIMEZONE: ${{ vars.APP_TIMEZONE }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          OUTPUT_PATH: ${{ vars.OUTPUT_PATH }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          TIME_PARSE_MODEL: ${{ vars.TIME_PARSE_MODEL }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          LLM_BATCH_SIZE: ${{ vars.LLM_BATCH_SIZE }}
+          LLM_TIMEOUT: ${{ vars.LLM_TIMEOUT }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
+          SMTP_USER: ${{ vars.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
         run: |
-          : > .env
+          cp .env.example .env
 
           append_if_set() {
             local key="$1"
@@ -78,6 +82,30 @@ jobs:
           append_if_set SMTP_USER "$SMTP_USER"
           append_if_set SMTP_PASS "$SMTP_PASS"
           append_if_set EMAIL_FROM "$EMAIL_FROM"
+
+      - name: Validate required action config
+        shell: bash
+        run: |
+          read_env() {
+            awk -F= -v key="$1" '$1 == key { value = substr($0, index($0, "=") + 1) } END { print value }' .env
+          }
+
+          require_real_value() {
+            local key="$1"
+            local placeholder="$2"
+            local value
+            value="$(read_env "$key")"
+            if [ -z "$value" ] || [ "$value" = "$placeholder" ]; then
+              echo "$key is not configured for GitHub Actions."
+              exit 1
+            fi
+          }
+
+          require_real_value OPENAI_API_KEY ""
+          require_real_value EMAIL_TO "you@example.com"
+          require_real_value SMTP_USER "your-smtp-user"
+          require_real_value SMTP_PASS "your-smtp-password"
+          require_real_value EMAIL_FROM "your-email@example.com"
 
       - name: Run app
         run: python app.py
