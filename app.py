@@ -157,11 +157,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print progress logs for debugging long-running stages.",
     )
-    parser.add_argument(
-        "--hello-email-first",
-        action="store_true",
-        help="Send a short SMTP test email before fetching papers.",
-    )
     return parser.parse_args()
 
 
@@ -899,25 +894,6 @@ def build_email(
     return msg
 
 
-def build_hello_email(recipient: str) -> EmailMessage:
-    msg = EmailMessage()
-    sender = str_env("EMAIL_FROM", str_env("SMTP_USER", "noreply@example.com"))
-    sent_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    msg["From"] = sender
-    msg["To"] = recipient
-    msg["Subject"] = f"arXiv recommend SMTP hello {sent_at}"
-    msg.set_content(
-        "\n".join(
-            [
-                "This is a hello email sent before fetching arXiv papers.",
-                f"Sent at: {sent_at}",
-                "If you received this, the SMTP configuration is working.",
-            ]
-        )
-    )
-    return msg
-
-
 def send_email(message: EmailMessage, dbg: bool = False) -> None:
     host = str_env("SMTP_HOST")
     if not host:
@@ -1131,24 +1107,9 @@ def main() -> int:
         (
             "Starting run with "
             f"explicit_time_window={explicit_time_window}, max_results={args.max_results}, "
-            f"email_mode={bool(args.to)}, dry_run={args.dry_run}, "
-            f"hello_email_first={args.hello_email_first}."
+            f"email_mode={bool(args.to)}, dry_run={args.dry_run}."
         ),
     )
-    if args.to and args.hello_email_first:
-        debug_log(args.dbg, "Sending hello email before fetching papers.")
-        hello_message = build_hello_email(args.to)
-        if args.dry_run:
-            debug_log(args.dbg, "Dry-run enabled; printing hello email MIME instead of sending.")
-            print(hello_message)
-        else:
-            try:
-                send_email(hello_message, dbg=args.dbg)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Failed to send hello email: {exc}", file=sys.stderr)
-                return 1
-            print(f"Sent hello email to {args.to}.")
-
     try:
         start_utc, end_utc = compute_time_window(
             start_raw=args.start,
