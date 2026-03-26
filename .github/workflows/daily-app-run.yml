@@ -50,9 +50,9 @@ jobs:
           SMTP_HOST: ${{ vars.SMTP_HOST }}
           SMTP_PORT: ${{ vars.SMTP_PORT }}
           SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
-          SMTP_USER: ${{ vars.SMTP_USER }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
         run: |
           cp .env.example .env
 
