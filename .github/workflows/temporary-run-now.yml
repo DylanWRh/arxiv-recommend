@@ -1,0 +1,28 @@
+name: Temporary run now
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/temporary-run-now.yml
+  workflow_dispatch:
+
+jobs:
+  require-private-recipient:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure EMAIL_TO secret is configured
+        env:
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        shell: bash
+        run: |
+          if [ -z "$EMAIL_TO" ]; then
+            echo "Set the EMAIL_TO secret before using the temporary run workflow."
+            exit 1
+          fi
+
+  run-pipeline-now:
+    needs: require-private-recipient
+    uses: ./.github/workflows/daily-app-run.yml
+    secrets: inherit

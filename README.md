@@ -21,7 +21,7 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 ## Key Environment Variables
 - `RESEARCH_PROFILE`: paragraph self-introduction of your research interests
 - `APP_TIMEZONE`: timezone for default date window and relative time resolution
-- `EMAIL_TO`: recipient email (optional)
+- `EMAIL_TO`: recipient email (optional). For GitHub Actions, keep a personal address in a repository or environment secret instead of a variable.
 - `OUTPUT_PATH`: report file path or directory (optional, default `./reports`)
 
 ### LLM settings

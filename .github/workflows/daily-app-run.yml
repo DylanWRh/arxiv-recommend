@@ -1,0 +1,83 @@
+name: Daily app run
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+      timezone: 'Asia/Shanghai'
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  run-app:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RESEARCH_PROFILE: ${{ vars.RESEARCH_PROFILE }}
+      APP_TIMEZONE: ${{ vars.APP_TIMEZONE }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      OUTPUT_PATH: ${{ vars.OUTPUT_PATH }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      TIME_PARSE_MODEL: ${{ vars.TIME_PARSE_MODEL }}
+      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+      LLM_BATCH_SIZE: ${{ vars.LLM_BATCH_SIZE }}
+      LLM_TIMEOUT: ${{ vars.LLM_TIMEOUT }}
+      SMTP_HOST: ${{ vars.SMTP_HOST }}
+      SMTP_PORT: ${{ vars.SMTP_PORT }}
+      SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
+      SMTP_USER: ${{ vars.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Require private recipient for scheduled runs
+        if: github.event_name == 'schedule' && env.EMAIL_TO == ''
+        run: |
+          echo "Set the EMAIL_TO secret before enabling scheduled delivery."
+          exit 1
+
+      - name: Build .env
+        shell: bash
+        run: |
+          : > .env
+
+          append_if_set() {
+            local key="$1"
+            local value="$2"
+            if [ -n "$value" ]; then
+              printf '%s=%s\n' "$key" "$value" >> .env
+            fi
+          }
+
+          append_if_set RESEARCH_PROFILE "$RESEARCH_PROFILE"
+          append_if_set APP_TIMEZONE "$APP_TIMEZONE"
+          append_if_set EMAIL_TO "$EMAIL_TO"
+          append_if_set OUTPUT_PATH "$OUTPUT_PATH"
+
+          append_if_set OPENAI_API_KEY "$OPENAI_API_KEY"
+          append_if_set OPENAI_MODEL "$OPENAI_MODEL"
+          append_if_set TIME_PARSE_MODEL "$TIME_PARSE_MODEL"
+          append_if_set OPENAI_BASE_URL "$OPENAI_BASE_URL"
+          append_if_set LLM_BATCH_SIZE "$LLM_BATCH_SIZE"
+          append_if_set LLM_TIMEOUT "$LLM_TIMEOUT"
+
+          append_if_set SMTP_HOST "$SMTP_HOST"
+          append_if_set SMTP_PORT "$SMTP_PORT"
+          append_if_set SMTP_USE_TLS "$SMTP_USE_TLS"
+          append_if_set SMTP_USER "$SMTP_USER"
+          append_if_set SMTP_PASS "$SMTP_PASS"
+          append_if_set EMAIL_FROM "$EMAIL_FROM"
+
+      - name: Run app
+        run: python app.py
