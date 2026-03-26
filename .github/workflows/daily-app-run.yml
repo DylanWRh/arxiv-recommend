@@ -103,9 +103,9 @@ jobs:
 
           require_real_value OPENAI_API_KEY ""
           require_real_value EMAIL_TO "you@example.com"
-          require_real_value SMTP_USER "your-smtp-user"
-          require_real_value SMTP_PASS "your-smtp-password"
-          require_real_value EMAIL_FROM "your-email@example.com"
+          require_real_value SMTP_USER "your-gmail-address@gmail.com"
+          require_real_value SMTP_PASS "your-gmail-app-password"
+          require_real_value EMAIL_FROM "your-gmail-address@gmail.com"
 
       - name: Run app
         run: python app.py --dbg

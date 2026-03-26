@@ -35,7 +35,7 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 ### SMTP settings (only needed when sending email)
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`
 - For GitHub Actions, keep `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` in repository or environment secrets.
-- `.env.example` defaults to the official `@stu.pku.edu.cn` mail client host `smtp.stu.pku.edu.cn`; the ITS page also says SMTP login should use your campus account credentials.
+- `.env.example` defaults to Gmail SMTP: `smtp.gmail.com:587` with STARTTLS, and `SMTP_PASS` should be a Google App Password.
 
 ## Flexible Time Parsing
 You can pass natural time expressions for `--start` and `--end`.
