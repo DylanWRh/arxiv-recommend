@@ -28,4 +28,6 @@ jobs:
   run-pipeline-now:
     needs: require-private-recipient
     uses: ./.github/workflows/daily-app-run.yml
+    with:
+      extra_args: --hello-email-first --max-results 5
     secrets: inherit

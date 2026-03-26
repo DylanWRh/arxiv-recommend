@@ -5,7 +5,18 @@ on:
     - cron: '0 8 * * *'
       timezone: 'Asia/Shanghai'
   workflow_dispatch:
+    inputs:
+      extra_args:
+        description: Extra CLI arguments to append to `python app.py --dbg`
+        required: false
+        type: string
+        default: ''
   workflow_call:
+    inputs:
+      extra_args:
+        required: false
+        type: string
+        default: ''
 
 jobs:
   run-app:
@@ -108,4 +119,6 @@ jobs:
           require_real_value EMAIL_FROM "your-gmail-address@gmail.com"
 
       - name: Run app
-        run: python app.py --dbg
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
+        run: python app.py --dbg $EXTRA_ARGS

@@ -85,6 +85,7 @@ conda run -n py310 python app.py \
 - `--llm-timeout`: LLM timeout seconds
 - `--dry-run`: no SMTP send; prints email MIME when `--to` is set
 - `--dbg`: print stage-by-stage debug progress logs
+- `--hello-email-first`: send a short SMTP test email before fetching papers
 
 ## Notes
 - arXiv query uses `submittedDate` and sorts by newest first.
