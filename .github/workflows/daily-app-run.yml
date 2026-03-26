@@ -108,4 +108,4 @@ jobs:
           require_real_value EMAIL_FROM "your-email@example.com"
 
       - name: Run app
-        run: python app.py
+        run: python app.py --dbg

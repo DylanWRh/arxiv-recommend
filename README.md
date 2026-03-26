@@ -35,6 +35,7 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 ### SMTP settings (only needed when sending email)
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`
 - For GitHub Actions, keep `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` in repository or environment secrets.
+- `.env.example` defaults to the official `@stu.pku.edu.cn` mail client host `smtp.stu.pku.edu.cn`; the ITS page also says SMTP login should use your campus account credentials.
 
 ## Flexible Time Parsing
 You can pass natural time expressions for `--start` and `--end`.
@@ -83,6 +84,7 @@ conda run -n py310 python app.py \
 - `--llm-batch-size`: number of papers per LLM batch
 - `--llm-timeout`: LLM timeout seconds
 - `--dry-run`: no SMTP send; prints email MIME when `--to` is set
+- `--dbg`: print stage-by-stage debug progress logs
 
 ## Notes
 - arXiv query uses `submittedDate` and sorts by newest first.

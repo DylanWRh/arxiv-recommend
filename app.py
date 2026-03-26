@@ -61,6 +61,13 @@ def str_env(name: str, default: str = "") -> str:
     return value if value else default
 
 
+def debug_log(enabled: bool, message: str) -> None:
+    if not enabled:
+        return
+    timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[dbg {timestamp}] {message}", flush=True)
+
+
 def load_dotenv(path: str = ".env") -> None:
     if not os.path.exists(path):
         return
@@ -144,6 +151,11 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Do everything except SMTP send. If --to is set, print email MIME; otherwise save report file.",
+    )
+    parser.add_argument(
+        "--dbg",
+        action="store_true",
+        help="Print progress logs for debugging long-running stages.",
     )
     return parser.parse_args()
 
@@ -253,6 +265,7 @@ def normalize_times_with_llm(
     reference_now: dt.datetime,
     llm_model: str,
     llm_timeout: int,
+    dbg: bool = False,
 ) -> tuple[str | None, str | None]:
     if not (start_raw or end_raw):
         return None, None
@@ -297,6 +310,7 @@ def normalize_times_with_llm(
         ],
     }
 
+    debug_log(dbg, f"Normalizing time window via LLM model={llm_model}.")
     response = requests.post(
         endpoint,
         headers={
@@ -331,6 +345,13 @@ def normalize_times_with_llm(
     if normalized_end == "":
         normalized_end = None
 
+    debug_log(
+        dbg,
+        (
+            "LLM time parsing completed with "
+            f"start={normalized_start or 'null'} end={normalized_end or 'null'}."
+        ),
+    )
     return normalized_start, normalized_end
 
 
@@ -340,6 +361,7 @@ def compute_time_window(
     tz_name: str,
     time_parse_model: str,
     llm_timeout: int,
+    dbg: bool = False,
 ) -> tuple[dt.datetime, dt.datetime]:
     tz = ZoneInfo(tz_name)
     now_local = dt.datetime.now(tz)
@@ -355,6 +377,7 @@ def compute_time_window(
                 reference_now=now_local,
                 llm_model=time_parse_model,
                 llm_timeout=llm_timeout,
+                dbg=dbg,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"LLM time parsing failed: {exc}. Falling back to local parsing.", file=sys.stderr)
@@ -378,6 +401,14 @@ def compute_time_window(
     if end_local <= start_local:
         raise ValueError("End time must be after start time.")
 
+    debug_log(
+        dbg,
+        (
+            "Resolved query window to "
+            f"{start_local.astimezone(dt.timezone.utc).isoformat()} -> "
+            f"{end_local.astimezone(dt.timezone.utc).isoformat()}."
+        ),
+    )
     return start_local.astimezone(dt.timezone.utc), end_local.astimezone(dt.timezone.utc)
 
 def datetime_to_arxiv(value: dt.datetime) -> str:
@@ -388,6 +419,7 @@ def fetch_arxiv_papers(
     start_utc: dt.datetime,
     end_utc: dt.datetime,
     max_results: int,
+    dbg: bool = False,
 ) -> list[Paper]:
     if max_results <= 0:
         return []
@@ -399,6 +431,14 @@ def fetch_arxiv_papers(
 
     while len(collected) < max_results:
         batch_size = min(page_size, max_results - len(collected))
+        debug_log(
+            dbg,
+            (
+                "Fetching arXiv batch "
+                f"start={start_idx} size={batch_size} for window "
+                f"{start_utc.isoformat()} -> {end_utc.isoformat()}."
+            ),
+        )
         params = {
             "search_query": search_query,
             "start": start_idx,
@@ -416,6 +456,7 @@ def fetch_arxiv_papers(
             break
         start_idx += batch_size
 
+    debug_log(dbg, f"Fetched {len(collected)} arXiv paper(s).")
     return collected
 
 def parse_arxiv_feed(feed_xml: str) -> list[Paper]:
@@ -519,6 +560,8 @@ def recommend_with_llm_batch(
     research_profile: str,
     llm_model: str,
     llm_timeout: int,
+    dbg: bool = False,
+    batch_label: str = "",
 ) -> list[Recommendation]:
     if not papers:
         return []
@@ -584,6 +627,8 @@ def recommend_with_llm_batch(
         ],
     }
 
+    label = f" {batch_label}" if batch_label else ""
+    debug_log(dbg, f"Sending recommendation request{label} with {len(papers)} paper(s) to model={llm_model}.")
     response = requests.post(
         endpoint,
         headers={
@@ -658,6 +703,7 @@ def recommend_with_llm_batch(
             )
         )
 
+    debug_log(dbg, f"Recommendation request{label} returned {len(recommendations)} recommendation(s).")
     return recommendations
 
 def recommend_with_llm(
@@ -666,6 +712,7 @@ def recommend_with_llm(
     llm_model: str,
     llm_batch_size: int,
     llm_timeout: int,
+    dbg: bool = False,
 ) -> list[Recommendation]:
     if not papers:
         return []
@@ -673,15 +720,19 @@ def recommend_with_llm(
     ordered = sorted(papers, key=lambda item: item.published, reverse=True)
     batch_size = max(1, llm_batch_size)
     collected: list[Recommendation] = []
+    total_batches = (len(ordered) + batch_size - 1) // batch_size
 
     for offset in range(0, len(ordered), batch_size):
         batch = ordered[offset : offset + batch_size]
+        batch_number = (offset // batch_size) + 1
         collected.extend(
             recommend_with_llm_batch(
                 papers=batch,
                 research_profile=research_profile,
                 llm_model=llm_model,
                 llm_timeout=llm_timeout,
+                dbg=dbg,
+                batch_label=f"{batch_number}/{total_batches}",
             )
         )
 
@@ -693,6 +744,7 @@ def recommend_with_llm(
 
     output = list(deduped.values())
     output.sort(key=lambda item: (item.score, item.paper.published), reverse=True)
+    debug_log(dbg, f"Deduped recommendations down to {len(output)} item(s).")
     return output
 
 def recommend_and_summarize(
@@ -701,11 +753,13 @@ def recommend_and_summarize(
     llm_model: str,
     llm_batch_size: int,
     llm_timeout: int,
+    dbg: bool = False,
 ) -> tuple[list[Recommendation], str]:
     if not papers:
         return [], "No papers"
 
     try:
+        debug_log(dbg, f"Running recommendation pipeline for {len(papers)} fetched paper(s).")
         return (
             recommend_with_llm(
                 papers=papers,
@@ -713,6 +767,7 @@ def recommend_and_summarize(
                 llm_model=llm_model,
                 llm_batch_size=llm_batch_size,
                 llm_timeout=llm_timeout,
+                dbg=dbg,
             ),
             "LLM",
         )
@@ -839,7 +894,7 @@ def build_email(
     return msg
 
 
-def send_email(message: EmailMessage) -> None:
+def send_email(message: EmailMessage, dbg: bool = False) -> None:
     host = str_env("SMTP_HOST")
     if not host:
         raise ValueError("SMTP_HOST is not set.")
@@ -847,15 +902,28 @@ def send_email(message: EmailMessage) -> None:
     use_tls = str_env("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
     username = str_env("SMTP_USER", "")
     password = str_env("SMTP_PASS", "")
+    use_implicit_ssl = use_tls and port in {465, 994}
+    smtp_cls = smtplib.SMTP_SSL if use_implicit_ssl else smtplib.SMTP
 
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
+    debug_log(
+        dbg,
+        (
+            f"Connecting to SMTP host={host} port={port} "
+            f"tls={use_tls} implicit_ssl={use_implicit_ssl}."
+        ),
+    )
+    with smtp_cls(host, port, timeout=30) as smtp:
         smtp.ehlo()
-        if use_tls:
+        if use_tls and not use_implicit_ssl:
+            debug_log(dbg, "Starting TLS negotiation.")
             smtp.starttls()
             smtp.ehlo()
         if username:
+            debug_log(dbg, "Authenticating with SMTP server.")
             smtp.login(username, password)
+        debug_log(dbg, "Sending email message.")
         smtp.send_message(message)
+    debug_log(dbg, "SMTP send completed.")
 
 
 def build_report_filename(
@@ -960,6 +1028,7 @@ def auto_backfill_default_run(
     llm_batch_size: int,
     llm_timeout: int,
     max_results: int,
+    dbg: bool = False,
 ) -> tuple[dt.datetime, list[Paper], list[Recommendation], str]:
     if initial_recommendations:
         return start_utc, initial_papers, initial_recommendations, initial_method
@@ -970,8 +1039,9 @@ def auto_backfill_default_run(
         candidate_start = end_utc - dt.timedelta(days=lookback_days) + dt.timedelta(seconds=1)
         if candidate_start >= start_utc:
             continue
+        debug_log(dbg, f"Trying auto-backfill lookback={lookback_days} day(s).")
         try:
-            candidate_papers = fetch_arxiv_papers(candidate_start, end_utc, max_results)
+            candidate_papers = fetch_arxiv_papers(candidate_start, end_utc, max_results, dbg=dbg)
         except Exception as exc:  # noqa: BLE001
             print(f"Auto-backfill fetch failed for {lookback_days} days: {exc}", file=sys.stderr)
             continue
@@ -987,6 +1057,7 @@ def auto_backfill_default_run(
             llm_model=llm_model,
             llm_batch_size=llm_batch_size,
             llm_timeout=llm_timeout,
+            dbg=dbg,
         )
         if candidate_recommendations:
             print(
@@ -1021,6 +1092,7 @@ def auto_backfill_default_run(
 def main() -> int:
     load_dotenv()
     args = parse_args()
+    debug_log(args.dbg, "Loaded configuration and parsed CLI arguments.")
 
     research_profile = normalize_research_profile(args.research_profile)
     if not research_profile:
@@ -1030,6 +1102,14 @@ def main() -> int:
     explicit_time_window = has_explicit_time_window(args.start, args.end)
     llm_batch_size = max(1, args.llm_batch_size)
     llm_timeout = max(5, args.llm_timeout)
+    debug_log(
+        args.dbg,
+        (
+            "Starting run with "
+            f"explicit_time_window={explicit_time_window}, max_results={args.max_results}, "
+            f"email_mode={bool(args.to)}, dry_run={args.dry_run}."
+        ),
+    )
     try:
         start_utc, end_utc = compute_time_window(
             start_raw=args.start,
@@ -1037,13 +1117,14 @@ def main() -> int:
             tz_name=args.timezone,
             time_parse_model=args.time_parse_model,
             llm_timeout=llm_timeout,
+            dbg=args.dbg,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Invalid time settings: {exc}", file=sys.stderr)
         return 1
 
     try:
-        papers = fetch_arxiv_papers(start_utc, end_utc, args.max_results)
+        papers = fetch_arxiv_papers(start_utc, end_utc, args.max_results, dbg=args.dbg)
     except Exception as exc:  # noqa: BLE001
         print(f"Failed to fetch arXiv papers: {exc}", file=sys.stderr)
         return 1
@@ -1054,6 +1135,11 @@ def main() -> int:
         llm_model=args.llm_model,
         llm_batch_size=llm_batch_size,
         llm_timeout=llm_timeout,
+        dbg=args.dbg,
+    )
+    debug_log(
+        args.dbg,
+        f"Initial recommendation stage completed with {len(recommendations)} item(s) using method={method_label}.",
     )
     if not explicit_time_window and not recommendations:
         start_utc, papers, recommendations, method_label = auto_backfill_default_run(
@@ -1067,6 +1153,11 @@ def main() -> int:
             llm_batch_size=llm_batch_size,
             llm_timeout=llm_timeout,
             max_results=args.max_results,
+            dbg=args.dbg,
+        )
+        debug_log(
+            args.dbg,
+            f"Auto-backfill stage completed with {len(recommendations)} item(s) using method={method_label}.",
         )
 
     text_report, html_report, markdown_report = render_reports(
@@ -1076,27 +1167,33 @@ def main() -> int:
         recommendations=recommendations,
         method_label=method_label,
     )
+    debug_log(args.dbg, "Rendered text, HTML, and markdown reports.")
 
     if not args.to:
         output_path = args.output or default_output_path(start_utc, end_utc)
         saved_path = save_report(output_path, markdown_report, start_utc, end_utc)
+        debug_log(args.dbg, f"Saved report to {saved_path}.")
         print(f"No email recipient provided. Saved recommendations to {saved_path}.")
         return 0
 
+    debug_log(args.dbg, "Building email message.")
     message = build_email(args.to, start_utc, end_utc, text_report, html_report)
 
     if args.dry_run:
+        debug_log(args.dbg, "Dry-run enabled; printing MIME message instead of sending.")
         print(message)
     else:
         try:
-            send_email(message)
+            send_email(message, dbg=args.dbg)
         except Exception as exc:  # noqa: BLE001
             print(f"Failed to send email: {exc}", file=sys.stderr)
             return 1
+        debug_log(args.dbg, f"Email send completed with {len(recommendations)} recommendation(s).")
         print(f"Sent {len(recommendations)} recommendations to {args.to}.")
 
     if args.output:
         saved_path = save_report(args.output, markdown_report, start_utc, end_utc)
+        debug_log(args.dbg, f"Saved report to {saved_path}.")
         print(f"Saved recommendations to {saved_path}.")
 
     return 0
