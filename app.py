@@ -7,6 +7,7 @@ import os
 import re
 import smtplib
 import sys
+import time
 import xml.etree.ElementTree as ET
 import uuid
 from dataclasses import dataclass
@@ -735,6 +736,7 @@ def recommend_with_llm(
                 batch_label=f"{batch_number}/{total_batches}",
             )
         )
+        time.sleep(10.0)
 
     deduped: dict[str, Recommendation] = {}
     for recommendation in collected:
