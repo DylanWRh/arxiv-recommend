@@ -112,7 +112,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-results",
         type=int,
-        default=200,
+        default=2000,
         help="Maximum number of arXiv papers to fetch from the date window.",
     )
     parser.add_argument(
