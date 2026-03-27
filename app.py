@@ -446,7 +446,7 @@ def fetch_arxiv_papers(
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }
-        response = requests.get(ARXIV_API_URL, params=params, timeout=30)
+        response = requests.get(ARXIV_API_URL, params=params, timeout=120)
         response.raise_for_status()
         papers = parse_arxiv_feed(response.text)
         if not papers:
