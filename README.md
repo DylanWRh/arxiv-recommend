@@ -31,6 +31,8 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 - `OPENAI_BASE_URL`: API base URL (default `https://api.openai.com/v1`)
 - `LLM_BATCH_SIZE`: number of papers per LLM batch (default `40`)
 - `LLM_TIMEOUT`: LLM request timeout in seconds (default `60`)
+- `LLM_API_RETRY_ATTEMPTS`: retry attempts for failed LLM API calls (default `3`)
+- `LLM_API_RETRY_SLEEP_SECONDS`: sleep seconds between LLM API retries (default `5`)
 
 ### SMTP settings (only needed when sending email)
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`
@@ -93,7 +95,6 @@ conda run -n py310 python app.py \
 - If LLM time parsing fails, the app falls back to local flexible parsing for common formats.
 - If recommendation LLM calls fail (or return no matches) during raw `python app.py`, the app uses auto-backfill and then a recent-paper fallback mode.
 - Default report filename format is `arxiv_recommendations_q<start>_<end>_gen<time>_<uid>.md`.
-
 
 
 

@@ -311,49 +311,73 @@ def normalize_times_with_llm(
         ],
     }
 
-    debug_log(dbg, f"Normalizing time window via LLM model={llm_model}.")
-    response = requests.post(
-        endpoint,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=request_payload,
-        timeout=max(5, llm_timeout),
-    )
-    response.raise_for_status()
+    max_attempts = max(1, int_env("LLM_API_RETRY_ATTEMPTS", 3))
+    retry_sleep_seconds = max(1, int_env("LLM_API_RETRY_SLEEP_SECONDS", 5))
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            debug_log(
+                dbg,
+                f"Normalizing time window via LLM model={llm_model} (attempt {attempt}/{max_attempts}).",
+            )
+            response = requests.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=request_payload,
+                timeout=max(5, llm_timeout),
+            )
+            response.raise_for_status()
 
-    payload = response.json()
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ValueError("Time parser LLM response has no choices.")
+            payload = response.json()
+            choices = payload.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise ValueError("Time parser LLM response has no choices.")
 
-    message = choices[0].get("message", {})
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("Time parser LLM response has no text content.")
+            message = choices[0].get("message", {})
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Time parser LLM response has no text content.")
 
-    parsed = extract_json_object(content)
+            parsed = extract_json_object(content)
 
-    start_value = parsed.get("start")
-    end_value = parsed.get("end")
+            start_value = parsed.get("start")
+            end_value = parsed.get("end")
 
-    normalized_start = str(start_value).strip() if start_value is not None else None
-    normalized_end = str(end_value).strip() if end_value is not None else None
+            normalized_start = str(start_value).strip() if start_value is not None else None
+            normalized_end = str(end_value).strip() if end_value is not None else None
 
-    if normalized_start == "":
-        normalized_start = None
-    if normalized_end == "":
-        normalized_end = None
+            if normalized_start == "":
+                normalized_start = None
+            if normalized_end == "":
+                normalized_end = None
 
-    debug_log(
-        dbg,
-        (
-            "LLM time parsing completed with "
-            f"start={normalized_start or 'null'} end={normalized_end or 'null'}."
-        ),
-    )
-    return normalized_start, normalized_end
+            debug_log(
+                dbg,
+                (
+                    "LLM time parsing completed with "
+                    f"start={normalized_start or 'null'} end={normalized_end or 'null'}."
+                ),
+            )
+            return normalized_start, normalized_end
+        except (requests.RequestException, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == max_attempts:
+                break
+            debug_log(
+                dbg,
+                (
+                    f"LLM time parsing attempt {attempt}/{max_attempts} failed: {exc}. "
+                    f"Retrying in {retry_sleep_seconds}s."
+                ),
+            )
+            time.sleep(float(retry_sleep_seconds))
+
+    if last_error is None:
+        raise RuntimeError("LLM time parsing failed without an explicit error.")
+    raise last_error
 
 
 def compute_time_window(
@@ -629,32 +653,63 @@ def recommend_with_llm_batch(
     }
 
     label = f" {batch_label}" if batch_label else ""
-    debug_log(dbg, f"Sending recommendation request{label} with {len(papers)} paper(s) to model={llm_model}.")
-    response = requests.post(
-        endpoint,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=request_payload,
-        timeout=max(5, llm_timeout),
-    )
-    response.raise_for_status()
+    max_attempts = max(1, int_env("LLM_API_RETRY_ATTEMPTS", 3))
+    retry_sleep_seconds = max(1, int_env("LLM_API_RETRY_SLEEP_SECONDS", 5))
 
-    payload = response.json()
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ValueError("LLM API response has no choices.")
+    raw_recommended: list[object] | None = None
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            debug_log(
+                dbg,
+                (
+                    f"Sending recommendation request{label} with {len(papers)} paper(s) "
+                    f"to model={llm_model} (attempt {attempt}/{max_attempts})."
+                ),
+            )
+            response = requests.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=request_payload,
+                timeout=max(5, llm_timeout),
+            )
+            response.raise_for_status()
 
-    message = choices[0].get("message", {})
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("LLM API response has no text content.")
+            payload = response.json()
+            choices = payload.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise ValueError("LLM API response has no choices.")
 
-    parsed = extract_json_object(content)
-    raw_recommended = parsed.get("recommended", [])
-    if not isinstance(raw_recommended, list):
-        raise ValueError("LLM response JSON missing 'recommended' list.")
+            message = choices[0].get("message", {})
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("LLM API response has no text content.")
+
+            parsed = extract_json_object(content)
+            raw_recommended = parsed.get("recommended", [])
+            if not isinstance(raw_recommended, list):
+                raise ValueError("LLM response JSON missing 'recommended' list.")
+            break
+        except (requests.RequestException, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == max_attempts:
+                break
+            debug_log(
+                dbg,
+                (
+                    f"Recommendation request{label} attempt {attempt}/{max_attempts} failed: {exc}. "
+                    f"Retrying in {retry_sleep_seconds}s."
+                ),
+            )
+            time.sleep(float(retry_sleep_seconds))
+
+    if raw_recommended is None:
+        if last_error is None:
+            raise RuntimeError("LLM recommendation failed without an explicit error.")
+        raise last_error
 
     recommendations: list[Recommendation] = []
     seen_ids: set[str] = set()
