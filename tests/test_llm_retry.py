@@ -22,6 +22,19 @@ class LlmRetryTests(unittest.TestCase):
             link="https://arxiv.org/abs/1234.5678",
         )
 
+    @patch.dict(
+        "os.environ",
+        {
+            "LLM_API_RETRY_ATTEMPTS": "",
+            "LLM_API_RETRY_SLEEP_SECONDS": "",
+        },
+        clear=False,
+    )
+    def test_llm_retry_config_defaults(self) -> None:
+        attempts, sleep_seconds = app.llm_retry_config()
+        self.assertEqual(attempts, 5)
+        self.assertEqual(sleep_seconds, 10)
+
     @patch("app.time.sleep")
     @patch("app.requests.post")
     @patch.dict(

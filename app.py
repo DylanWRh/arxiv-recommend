@@ -70,8 +70,8 @@ def debug_log(enabled: bool, message: str) -> None:
 
 
 def llm_retry_config() -> tuple[int, int]:
-    max_attempts = max(1, int_env("LLM_API_RETRY_ATTEMPTS", 3))
-    retry_sleep_seconds = max(1, int_env("LLM_API_RETRY_SLEEP_SECONDS", 5))
+    max_attempts = max(1, int_env("LLM_API_RETRY_ATTEMPTS", 5))
+    retry_sleep_seconds = max(1, int_env("LLM_API_RETRY_SLEEP_SECONDS", 10))
     return max_attempts, retry_sleep_seconds
 
 
