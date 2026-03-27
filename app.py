@@ -69,6 +69,12 @@ def debug_log(enabled: bool, message: str) -> None:
     print(f"[dbg {timestamp}] {message}", flush=True)
 
 
+def llm_retry_config() -> tuple[int, int]:
+    max_attempts = max(1, int_env("LLM_API_RETRY_ATTEMPTS", 3))
+    retry_sleep_seconds = max(1, int_env("LLM_API_RETRY_SLEEP_SECONDS", 5))
+    return max_attempts, retry_sleep_seconds
+
+
 def load_dotenv(path: str = ".env") -> None:
     if not os.path.exists(path):
         return
@@ -311,8 +317,7 @@ def normalize_times_with_llm(
         ],
     }
 
-    max_attempts = max(1, int_env("LLM_API_RETRY_ATTEMPTS", 3))
-    retry_sleep_seconds = max(1, int_env("LLM_API_RETRY_SLEEP_SECONDS", 5))
+    max_attempts, retry_sleep_seconds = llm_retry_config()
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -653,8 +658,7 @@ def recommend_with_llm_batch(
     }
 
     label = f" {batch_label}" if batch_label else ""
-    max_attempts = max(1, int_env("LLM_API_RETRY_ATTEMPTS", 3))
-    retry_sleep_seconds = max(1, int_env("LLM_API_RETRY_SLEEP_SECONDS", 5))
+    max_attempts, retry_sleep_seconds = llm_retry_config()
 
     raw_recommended: list[object] | None = None
     last_error: Exception | None = None
