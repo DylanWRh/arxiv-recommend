@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import random
 import re
 import smtplib
 import sys
@@ -11,6 +12,7 @@ import time
 import xml.etree.ElementTree as ET
 import uuid
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from email.message import EmailMessage
 from html import escape
 from typing import Callable, TypeVar
@@ -20,6 +22,16 @@ import requests
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+ARXIV_PAGE_SIZE = 100
+ARXIV_MIN_REQUEST_GAP_SECONDS = 3.2
+ARXIV_MAX_RETRY_ATTEMPTS = 6
+ARXIV_RETRY_BASE_DELAY_SECONDS = 3.0
+ARXIV_RETRY_MAX_DELAY_SECONDS = 60.0
+ARXIV_REQUEST_HEADERS = {
+    "User-Agent": "arxiv-recommend/1.0",
+    "Accept": "application/atom+xml",
+}
+_last_arxiv_request_monotonic = 0.0
 
 
 @dataclass
@@ -458,6 +470,141 @@ def datetime_to_arxiv(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).strftime("%Y%m%d%H%M")
 
 
+def _sleep_to_respect_arxiv_pacing(dbg: bool, min_gap_seconds: float = ARXIV_MIN_REQUEST_GAP_SECONDS) -> None:
+    global _last_arxiv_request_monotonic
+    if _last_arxiv_request_monotonic <= 0:
+        return
+
+    elapsed = time.monotonic() - _last_arxiv_request_monotonic
+    if elapsed >= min_gap_seconds:
+        return
+
+    delay = min_gap_seconds - elapsed
+    debug_log(dbg, f"Sleeping {delay:.1f}s to respect arXiv API pacing.")
+    time.sleep(delay)
+
+
+def _mark_arxiv_request_time() -> None:
+    global _last_arxiv_request_monotonic
+    _last_arxiv_request_monotonic = time.monotonic()
+
+
+def _parse_retry_after_seconds(retry_after: str | None) -> float | None:
+    if retry_after is None:
+        return None
+
+    value = retry_after.strip()
+    if not value:
+        return None
+
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    seconds = (parsed - dt.datetime.now(dt.timezone.utc)).total_seconds()
+    return max(0.0, seconds)
+
+
+def _compute_arxiv_backoff_delay(attempt: int) -> float:
+    base_delay = min(
+        ARXIV_RETRY_MAX_DELAY_SECONDS,
+        ARXIV_RETRY_BASE_DELAY_SECONDS * (2 ** attempt),
+    )
+    return base_delay + random.uniform(0.0, 1.0)
+
+
+def _compute_arxiv_retry_delay(response: requests.Response, attempt: int) -> float:
+    retry_after_seconds = _parse_retry_after_seconds(response.headers.get("Retry-After"))
+    if retry_after_seconds is not None:
+        return max(ARXIV_RETRY_BASE_DELAY_SECONDS, retry_after_seconds)
+    return _compute_arxiv_backoff_delay(attempt)
+
+
+def fetch_arxiv_batch(
+    params: dict[str, str | int],
+    dbg: bool = False,
+    max_attempts: int = ARXIV_MAX_RETRY_ATTEMPTS,
+) -> str:
+    last_error: Exception | None = None
+
+    for attempt in range(max(1, max_attempts)):
+        _sleep_to_respect_arxiv_pacing(dbg)
+        try:
+            response = requests.get(
+                ARXIV_API_URL,
+                params=params,
+                headers=ARXIV_REQUEST_HEADERS,
+                timeout=120,
+            )
+        except requests.RequestException as exc:
+            _mark_arxiv_request_time()
+            last_error = exc
+            if attempt >= max_attempts - 1:
+                break
+            delay = _compute_arxiv_backoff_delay(attempt)
+            debug_log(
+                dbg,
+                (
+                    "arXiv request failed with "
+                    f"{exc.__class__.__name__}: {exc}. Retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 1}/{max_attempts})."
+                ),
+            )
+            time.sleep(delay)
+            continue
+
+        _mark_arxiv_request_time()
+
+        if response.status_code == 429:
+            last_error = requests.HTTPError(
+                f"arXiv returned HTTP 429 for params={params}",
+                response=response,
+            )
+            if attempt >= max_attempts - 1:
+                break
+            delay = _compute_arxiv_retry_delay(response, attempt)
+            debug_log(
+                dbg,
+                (
+                    "arXiv returned HTTP 429. "
+                    f"Retrying in {delay:.1f}s (attempt {attempt + 1}/{max_attempts})."
+                ),
+            )
+            time.sleep(delay)
+            continue
+
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            last_error = exc
+            if response.status_code >= 500 and attempt < max_attempts - 1:
+                delay = _compute_arxiv_backoff_delay(attempt)
+                debug_log(
+                    dbg,
+                    (
+                        f"arXiv returned HTTP {response.status_code}. "
+                        f"Retrying in {delay:.1f}s (attempt {attempt + 1}/{max_attempts})."
+                    ),
+                )
+                time.sleep(delay)
+                continue
+            raise
+
+        return response.text
+
+    if last_error is None:
+        raise RuntimeError("arXiv batch fetch failed without an exception.")
+    raise last_error
+
+
 def fetch_arxiv_papers(
     start_utc: dt.datetime,
     end_utc: dt.datetime,
@@ -470,7 +617,7 @@ def fetch_arxiv_papers(
     search_query = f"submittedDate:[{datetime_to_arxiv(start_utc)} TO {datetime_to_arxiv(end_utc)}]"
     collected: list[Paper] = []
     start_idx = 0
-    page_size = 100
+    page_size = ARXIV_PAGE_SIZE
 
     while len(collected) < max_results:
         batch_size = min(page_size, max_results - len(collected))
@@ -489,9 +636,7 @@ def fetch_arxiv_papers(
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }
-        response = requests.get(ARXIV_API_URL, params=params, timeout=120)
-        response.raise_for_status()
-        papers = parse_arxiv_feed(response.text)
+        papers = parse_arxiv_feed(fetch_arxiv_batch(params, dbg=dbg))
         if not papers:
             break
         collected.extend(papers)
