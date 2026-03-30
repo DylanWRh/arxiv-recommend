@@ -22,6 +22,9 @@ import requests
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+ARXIV_ANNOUNCEMENT_TZ = "America/New_York"
+ARXIV_ANNOUNCEMENT_HOUR = 20
+ARXIV_SUBMISSION_CUTOFF_HOUR = 14
 ARXIV_PAGE_SIZE = 100
 ARXIV_MIN_REQUEST_GAP_SECONDS = 3.2
 ARXIV_MAX_RETRY_ATTEMPTS = 6
@@ -147,15 +150,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--start",
-        help="Flexible start time (e.g. 2026.03.04, March 4 2026, last Friday 9am). If both --start/--end are omitted, defaults to yesterday 00:00:00 in --timezone.",
+        help="Flexible start time (e.g. 2026.03.04, March 4 2026, last Friday 9am). If both --start/--end are omitted, defaults to the latest fully announced arXiv submission window.",
     )
     parser.add_argument(
         "--end",
-        help="Flexible end time (e.g. now, today 23:59, 2026/03/08 18:30). If both --start/--end are omitted, defaults to yesterday 23:59:59 in --timezone.",
+        help="Flexible end time (e.g. now, today 23:59, 2026/03/08 18:30). If both --start/--end are omitted, defaults to the latest fully announced arXiv submission window.",
     )
     parser.add_argument(
         "--timezone",
-        help="Timezone name used for date parsing and defaults (e.g. UTC, America/New_York).",
+        help="Timezone name used for parsing explicit relative times (e.g. UTC, America/New_York).",
         default=str_env("APP_TIMEZONE", "UTC"),
     )
     parser.add_argument(
@@ -410,6 +413,56 @@ def normalize_times_with_llm(
     return normalized_start, normalized_end
 
 
+def compute_latest_announced_arxiv_window(
+    now_utc: dt.datetime | None = None,
+) -> tuple[dt.datetime, dt.datetime]:
+    if now_utc is None:
+        now_utc = dt.datetime.now(dt.timezone.utc)
+
+    announcement_tz = ZoneInfo(ARXIV_ANNOUNCEMENT_TZ)
+    now_local = now_utc.astimezone(announcement_tz)
+    latest_announcement: dt.datetime | None = None
+
+    for days_back in range(0, 8):
+        candidate_date = now_local.date() - dt.timedelta(days=days_back)
+        candidate = dt.datetime.combine(
+            candidate_date,
+            dt.time(hour=ARXIV_ANNOUNCEMENT_HOUR),
+            tzinfo=announcement_tz,
+        )
+        if candidate > now_local:
+            continue
+        if candidate.weekday() not in {6, 0, 1, 2, 3}:
+            continue
+        latest_announcement = candidate
+        break
+
+    if latest_announcement is None:
+        raise RuntimeError("Could not determine the latest arXiv announcement time.")
+
+    if latest_announcement.weekday() == 6:
+        start_date = latest_announcement.date() - dt.timedelta(days=3)
+        end_date = latest_announcement.date() - dt.timedelta(days=2)
+    elif latest_announcement.weekday() == 0:
+        start_date = latest_announcement.date() - dt.timedelta(days=3)
+        end_date = latest_announcement.date()
+    else:
+        start_date = latest_announcement.date() - dt.timedelta(days=1)
+        end_date = latest_announcement.date()
+
+    start_local = dt.datetime.combine(
+        start_date,
+        dt.time(hour=ARXIV_SUBMISSION_CUTOFF_HOUR),
+        tzinfo=announcement_tz,
+    )
+    end_local = dt.datetime.combine(
+        end_date,
+        dt.time(hour=ARXIV_SUBMISSION_CUTOFF_HOUR),
+        tzinfo=announcement_tz,
+    )
+    return start_local.astimezone(dt.timezone.utc), end_local.astimezone(dt.timezone.utc)
+
+
 def compute_time_window(
     start_raw: str | None,
     end_raw: str | None,
@@ -444,9 +497,15 @@ def compute_time_window(
     end_local = parse_user_datetime(end_source, tz, now_local, for_end=True)
 
     if start_local is None and end_local is None:
-        yesterday = now_local - dt.timedelta(days=1)
-        start_local = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_local = yesterday.replace(hour=23, minute=59, second=59, microsecond=0)
+        start_utc, end_utc = compute_latest_announced_arxiv_window()
+        debug_log(
+            dbg,
+            (
+                "No explicit window provided; using the latest fully announced arXiv window "
+                f"{start_utc.isoformat()} -> {end_utc.isoformat()}."
+            ),
+        )
+        return start_utc, end_utc
     else:
         if end_local is None:
             end_local = now_local
@@ -951,26 +1010,27 @@ def recommend_and_summarize(
     llm_batch_size: int,
     llm_timeout: int,
     dbg: bool = False,
-) -> tuple[list[Recommendation], str]:
+) -> tuple[list[Recommendation], str, str | None]:
     if not papers:
-        return [], "No papers"
+        return [], "LLM skipped", "No arXiv papers found in this time window."
 
     try:
         debug_log(dbg, f"Running recommendation pipeline for {len(papers)} fetched paper(s).")
-        return (
-            recommend_with_llm(
-                papers=papers,
-                research_profile=research_profile,
-                llm_model=llm_model,
-                llm_batch_size=llm_batch_size,
-                llm_timeout=llm_timeout,
-                dbg=dbg,
-            ),
-            "LLM",
+        recommendations = recommend_with_llm(
+            papers=papers,
+            research_profile=research_profile,
+            llm_model=llm_model,
+            llm_batch_size=llm_batch_size,
+            llm_timeout=llm_timeout,
+            dbg=dbg,
         )
+        empty_message = None
+        if not recommendations:
+            empty_message = "No relevant papers were recommended in this time window."
+        return recommendations, "LLM", empty_message
     except Exception as exc:  # noqa: BLE001
         print(f"LLM recommendation failed: {exc}.", file=sys.stderr)
-        return [], "LLM unavailable"
+        return [], "LLM unavailable", "Recommendations could not be generated because the LLM request failed."
 
 def format_score(score: float) -> str:
     if score.is_integer():
@@ -984,6 +1044,7 @@ def render_reports(
     research_profile: str,
     recommendations: list[Recommendation],
     method_label: str,
+    empty_message: str | None = None,
 ) -> tuple[str, str, str]:
     profile_text = compact_text(research_profile, 700)
 
@@ -1012,9 +1073,10 @@ def render_reports(
     ]
 
     if not recommendations:
-        text_lines.append("No relevant papers found in this time window.")
-        html_blocks.append("<li>No relevant papers found in this time window.</li>")
-        markdown_lines.append("No relevant papers found in this time window.")
+        message = empty_message or "No relevant papers found in this time window."
+        text_lines.append(message)
+        html_blocks.append(f"<li>{escape(message)}</li>")
+        markdown_lines.append(message)
 
     for idx, recommendation in enumerate(recommendations, start=1):
         paper = recommendation.paper
@@ -1190,102 +1252,6 @@ def save_report(path: str, markdown_report: str, start_utc: dt.datetime, end_utc
 
     return candidate
 
-def has_explicit_time_window(start_raw: str | None, end_raw: str | None) -> bool:
-    return bool((start_raw and start_raw.strip()) or (end_raw and end_raw.strip()))
-
-def build_recent_fallback_recommendations(papers: list[Paper]) -> list[Recommendation]:
-    # Keep the full fetched set so no potentially useful recent paper is dropped.
-    ordered = sorted(papers, key=lambda item: item.published, reverse=True)
-    output: list[Recommendation] = []
-    for paper in ordered:
-        output.append(
-            Recommendation(
-                paper=paper,
-                title_zh=f"\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u6807\u9898\uff09{paper.title}",
-                abstract_zh="\uff08\u81ea\u52a8\u515c\u5e95\uff09\u5f53\u524d\u672a\u83b7\u5f97LLM\u4e2d\u6587\u6458\u8981\uff0c\u8bf7\u53c2\u8003\u82f1\u6587\u6458\u8981\u3002",
-                score=0.0,
-                matched_interests=[],
-                summary=summarize_abstract(paper.summary),
-                reason=(
-                    "Fallback recent-paper mode: the LLM returned no confident relevance match, "
-                    "so this newly submitted paper is included for daily tracking."
-                ),
-            )
-        )
-    return output
-
-def auto_backfill_default_run(
-    start_utc: dt.datetime,
-    end_utc: dt.datetime,
-    initial_papers: list[Paper],
-    initial_recommendations: list[Recommendation],
-    initial_method: str,
-    research_profile: str,
-    llm_model: str,
-    llm_batch_size: int,
-    llm_timeout: int,
-    max_results: int,
-    dbg: bool = False,
-) -> tuple[dt.datetime, list[Paper], list[Recommendation], str]:
-    if initial_recommendations:
-        return start_utc, initial_papers, initial_recommendations, initial_method
-    fallback_papers = initial_papers[:] if initial_papers else []
-    fallback_start = start_utc
-    fallback_days = 1
-    for lookback_days in [2, 3, 5, 7, 14]:
-        candidate_start = end_utc - dt.timedelta(days=lookback_days) + dt.timedelta(seconds=1)
-        if candidate_start >= start_utc:
-            continue
-        debug_log(dbg, f"Trying auto-backfill lookback={lookback_days} day(s).")
-        try:
-            candidate_papers = fetch_arxiv_papers(candidate_start, end_utc, max_results, dbg=dbg)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Auto-backfill fetch failed for {lookback_days} days: {exc}", file=sys.stderr)
-            continue
-        if not candidate_papers:
-            continue
-        if not fallback_papers:
-            fallback_papers = candidate_papers
-            fallback_start = candidate_start
-            fallback_days = lookback_days
-        candidate_recommendations, candidate_method = recommend_and_summarize(
-            papers=candidate_papers,
-            research_profile=research_profile,
-            llm_model=llm_model,
-            llm_batch_size=llm_batch_size,
-            llm_timeout=llm_timeout,
-            dbg=dbg,
-        )
-        if candidate_recommendations:
-            print(
-                (
-                    "Auto-backfill expanded default run to "
-                    f"{lookback_days} day(s) and found {len(candidate_recommendations)} recommendation(s)."
-                ),
-                file=sys.stderr,
-            )
-            return (
-                candidate_start,
-                candidate_papers,
-                candidate_recommendations,
-                f"{candidate_method} (auto-backfill {lookback_days}d)",
-            )
-    if fallback_papers:
-        print(
-            (
-                "Auto-backfill enabled recent fallback recommendations because "
-                "LLM returned no relevant papers in the default run."
-            ),
-            file=sys.stderr,
-        )
-        return (
-            fallback_start,
-            fallback_papers,
-            build_recent_fallback_recommendations(fallback_papers),
-            f"Recent fallback ({fallback_days}d window)",
-        )
-    return start_utc, initial_papers, initial_recommendations, initial_method
-
 def main() -> int:
     load_dotenv()
     args = parse_args()
@@ -1296,15 +1262,13 @@ def main() -> int:
         print("No research profile provided. Set --research-profile or RESEARCH_PROFILE.", file=sys.stderr)
         return 1
 
-    explicit_time_window = has_explicit_time_window(args.start, args.end)
     llm_batch_size = max(1, args.llm_batch_size)
     llm_timeout = max(5, args.llm_timeout)
     debug_log(
         args.dbg,
         (
             "Starting run with "
-            f"explicit_time_window={explicit_time_window}, max_results={args.max_results}, "
-            f"email_mode={bool(args.to)}, dry_run={args.dry_run}."
+            f"max_results={args.max_results}, email_mode={bool(args.to)}, dry_run={args.dry_run}."
         ),
     )
     try:
@@ -1326,7 +1290,7 @@ def main() -> int:
         print(f"Failed to fetch arXiv papers: {exc}", file=sys.stderr)
         return 1
 
-    recommendations, method_label = recommend_and_summarize(
+    recommendations, method_label, empty_message = recommend_and_summarize(
         papers=papers,
         research_profile=research_profile,
         llm_model=args.llm_model,
@@ -1338,24 +1302,6 @@ def main() -> int:
         args.dbg,
         f"Initial recommendation stage completed with {len(recommendations)} item(s) using method={method_label}.",
     )
-    if not explicit_time_window and not recommendations:
-        start_utc, papers, recommendations, method_label = auto_backfill_default_run(
-            start_utc=start_utc,
-            end_utc=end_utc,
-            initial_papers=papers,
-            initial_recommendations=recommendations,
-            initial_method=method_label,
-            research_profile=research_profile,
-            llm_model=args.llm_model,
-            llm_batch_size=llm_batch_size,
-            llm_timeout=llm_timeout,
-            max_results=args.max_results,
-            dbg=args.dbg,
-        )
-        debug_log(
-            args.dbg,
-            f"Auto-backfill stage completed with {len(recommendations)} item(s) using method={method_label}.",
-        )
 
     text_report, html_report, markdown_report = render_reports(
         start_utc=start_utc,
@@ -1363,6 +1309,7 @@ def main() -> int:
         research_profile=research_profile,
         recommendations=recommendations,
         method_label=method_label,
+        empty_message=empty_message,
     )
     debug_log(args.dbg, "Rendered text, HTML, and markdown reports.")
 
@@ -1370,7 +1317,7 @@ def main() -> int:
         output_path = args.output or default_output_path(start_utc, end_utc)
         saved_path = save_report(output_path, markdown_report, start_utc, end_utc)
         debug_log(args.dbg, f"Saved report to {saved_path}.")
-        print(f"No email recipient provided. Saved recommendations to {saved_path}.")
+        print(f"No email recipient provided. Saved report to {saved_path}.")
         return 0
 
     debug_log(args.dbg, "Building email message.")
@@ -1386,12 +1333,12 @@ def main() -> int:
             print(f"Failed to send email: {exc}", file=sys.stderr)
             return 1
         debug_log(args.dbg, f"Email send completed with {len(recommendations)} recommendation(s).")
-        print(f"Sent {len(recommendations)} recommendations to {args.to}.")
+        print(f"Sent report to {args.to} with {len(recommendations)} recommendation(s).")
 
     if args.output:
         saved_path = save_report(args.output, markdown_report, start_utc, end_utc)
         debug_log(args.dbg, f"Saved report to {saved_path}.")
-        print(f"Saved recommendations to {saved_path}.")
+        print(f"Saved report to {saved_path}.")
 
     return 0
 

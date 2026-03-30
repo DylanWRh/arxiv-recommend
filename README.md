@@ -20,7 +20,7 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 
 ## Key Environment Variables
 - `RESEARCH_PROFILE`: paragraph self-introduction of your research interests
-- `APP_TIMEZONE`: timezone for default date window and relative time resolution
+- `APP_TIMEZONE`: timezone for parsing explicit relative time expressions
 - `EMAIL_TO`: recipient email (optional). For GitHub Actions, keep a personal address in a repository or environment secret instead of a variable.
 - `OUTPUT_PATH`: report file path or directory (optional, default `./reports`)
 
@@ -39,7 +39,7 @@ Copy `.env.example` to `.env` (or set environment variables directly).
 
 ## Flexible Time Parsing
 You can pass natural time expressions for `--start` and `--end`.
-If both are omitted, the app defaults to yesterday in your timezone (`start=yesterday 00:00:00`, `end=yesterday 23:59:59`). If that raw run returns no recommendations, the app auto-backfills recent windows (2/3/5/7/14 days) to reduce empty daily output.
+If both are omitted, the app defaults to the latest fully announced arXiv submission window, based on arXiv's `America/New_York` announcement schedule rather than your local calendar day.
 The app calls an LLM to normalize them into ISO datetimes and provides explicit context:
 - current reference timestamp (`reference_now`)
 - reference date and weekday
@@ -73,8 +73,8 @@ conda run -n py310 python app.py \
 
 ## CLI Options
 - `--research-profile`: paragraph self-introduction for recommendation grounding
-- `--start`: flexible start time expression (default when both omitted: yesterday 00:00:00 in `--timezone`)
-- `--end`: flexible end time expression (default when both omitted: yesterday 23:59:59 in `--timezone`)
+- `--start`: flexible start time expression (default when both omitted: latest fully announced arXiv submission window)
+- `--end`: flexible end time expression (default when both omitted: latest fully announced arXiv submission window)
 - `--timezone`: IANA timezone, default `UTC`
 - `--max-results`: max arXiv papers fetched from the window, default `200`
 - `--to`: recipient email; if omitted, app saves report file
@@ -88,10 +88,13 @@ conda run -n py310 python app.py \
 
 ## Notes
 - arXiv query uses `submittedDate` and sorts by newest first.
+- The default no-args run follows arXiv's announcement schedule so scheduled runs query the latest fully public batch, including the wider Friday-to-Monday bucket after the weekend gap.
 - Recommendations include all papers judged relevant in the fetched window, and each recommendation includes `Chinese title` and `Chinese abstract` fields.
 - Every recommendation includes a reason that explains the connection to your research profile.
 - If LLM time parsing fails, the app falls back to local flexible parsing for common formats.
-- If recommendation LLM calls fail (or return no matches) during raw `python app.py`, the app uses auto-backfill and then a recent-paper fallback mode.
+- If no papers are fetched, the report says so directly.
+- If the LLM returns no relevant matches, the report says so directly.
+- If the recommendation LLM call fails, the report says recommendations could not be generated; it does not fall back to naive recommendation mode.
 - Default report filename format is `arxiv_recommendations_q<start>_<end>_gen<time>_<uid>.md`.
 
 
