@@ -25,10 +25,10 @@ ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 ARXIV_ANNOUNCEMENT_TZ = "America/New_York"
 ARXIV_ANNOUNCEMENT_HOUR = 20
 ARXIV_SUBMISSION_CUTOFF_HOUR = 14
-ARXIV_PAGE_SIZE = 100
-ARXIV_MIN_REQUEST_GAP_SECONDS = 3.2
-ARXIV_MAX_RETRY_ATTEMPTS = 6
-ARXIV_RETRY_BASE_DELAY_SECONDS = 3.0
+ARXIV_PAGE_SIZE = 2000
+ARXIV_MIN_REQUEST_GAP_SECONDS = 5.0
+ARXIV_MAX_RETRY_ATTEMPTS = 60
+ARXIV_RETRY_BASE_DELAY_SECONDS = 5.0
 ARXIV_RETRY_MAX_DELAY_SECONDS = 60.0
 ARXIV_REQUEST_HEADERS = {
     "User-Agent": "arxiv-recommend/1.0",
@@ -676,7 +676,7 @@ def fetch_arxiv_papers(
     search_query = f"submittedDate:[{datetime_to_arxiv(start_utc)} TO {datetime_to_arxiv(end_utc)}]"
     collected: list[Paper] = []
     start_idx = 0
-    page_size = ARXIV_PAGE_SIZE
+    page_size = min(ARXIV_PAGE_SIZE, max_results)
 
     while len(collected) < max_results:
         batch_size = min(page_size, max_results - len(collected))
@@ -699,9 +699,9 @@ def fetch_arxiv_papers(
         if not papers:
             break
         collected.extend(papers)
+        start_idx += len(papers)
         if len(papers) < batch_size:
             break
-        start_idx += batch_size
 
     debug_log(dbg, f"Fetched {len(collected)} arXiv paper(s).")
     return collected

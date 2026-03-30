@@ -76,7 +76,7 @@ conda run -n py310 python app.py \
 - `--start`: flexible start time expression (default when both omitted: latest fully announced arXiv submission window)
 - `--end`: flexible end time expression (default when both omitted: latest fully announced arXiv submission window)
 - `--timezone`: IANA timezone, default `UTC`
-- `--max-results`: max arXiv papers fetched from the window, default `200`
+- `--max-results`: max arXiv papers fetched from the window, default `2000`
 - `--to`: recipient email; if omitted, app saves report file
 - `--output`: output report file path or directory
 - `--llm-model`: LLM model for recommendations
