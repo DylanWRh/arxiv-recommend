@@ -10,7 +10,7 @@ from utils.database import (
     exclude_saved_papers,
     load_saved_paper_ids,
     resolve_state_dir,
-    save_recommendations_history,
+    save_processed_papers_state,
 )
 from utils.emailing import build_email, send_email
 from utils.llm_recommender import recommend_and_summarize
@@ -73,13 +73,13 @@ def parse_args() -> argparse.Namespace:
         "--save-to-db",
         action=argparse.BooleanOptionalAction,
         default=bool_env("SAVE_TO_DB", True),
-        help="Whether to persist recommended papers to the JSON state store.",
+        help="Whether to persist processed papers to the JSON state store.",
     )
     parser.add_argument(
         "--state-dir",
         "--db-path",
         dest="state_dir",
-        help="Directory used to store recommendation history shards and run JSON files.",
+        help="Directory used to store one JSON state file per paper under recommended/not-recommended YYMM folders.",
         default=str_env(
             "RECOMMENDATIONS_STATE_DIR",
             str_env("RECOMMENDATIONS_DB_PATH", DEFAULT_RECOMMENDATIONS_STATE_DIR),
@@ -245,8 +245,9 @@ def main() -> int:
 
     if args.save_to_db:
         try:
-            save_recommendations_history(
+            save_processed_papers_state(
                 state_dir=state_dir,
+                processed_papers=papers,
                 recommendations=recommendations,
                 start_utc=start_utc,
                 end_utc=end_utc,

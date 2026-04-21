@@ -59,11 +59,11 @@ Common optional values:
 - `APP_TIMEZONE`: timezone used when parsing inputs like `today`, `yesterday`, or `last Friday 9am`
 - `SAVE_REPORT`: whether to save a Markdown report locally. Default: `true`
 - `SEND_EMAIL`: whether to send email when running locally. Default: `false`
-- `SAVE_TO_DB`: whether to record recommended papers in the JSON state store. Default: `true`
+- `SAVE_TO_DB`: whether to record processed papers in the JSON state store. Default: `true`
 - `EMAIL_TO`: default email recipient
 - `OUTPUT_PATH`: default output path when saving a report
 - `RECOMMENDATIONS_STATE_DIR`: directory used to store recommendation state JSON files. Default: `data`
-  The app writes per-run JSON records plus sharded `paper_id` index files under this directory.
+  The app writes one JSON file per paper under `recommended-papers/<yymm>/` or `not-recommended-papers/<yymm>/`.
 - `OPENAI_MODEL`: recommendation model
 - `TIME_PARSE_MODEL`: model used to normalize flexible time expressions
 - `OPENAI_BASE_URL`: API base URL for an OpenAI-compatible provider
@@ -227,8 +227,8 @@ python app.py --dbg
 | `--output` | Output file path or directory for the Markdown report |
 | `--save-report`, `--no-save-report` | Enable or disable saving the Markdown report. Default: `true` |
 | `--send-email`, `--no-send-email` | Enable or disable sending email. Default: `false` |
-| `--save-to-db`, `--no-save-to-db` | Enable or disable writing recommendations to the JSON state store. Default: `true` |
-| `--state-dir` | Directory used to persist recommendation state JSON files |
+| `--save-to-db`, `--no-save-to-db` | Enable or disable writing processed papers to the JSON state store. Default: `true` |
+| `--state-dir` | Directory used to persist one JSON state file per paper under recommended and not-recommended `YYMM` folders |
 | `--llm-model` | Model used for recommendation and summarization |
 | `--time-parse-model` | Model used to normalize flexible time expressions |
 | `--llm-batch-size` | Number of papers evaluated per LLM batch |
@@ -241,6 +241,10 @@ python app.py --dbg
 - arXiv papers are fetched with `submittedDate` and sorted newest first.
 - Time expressions like `today`, `yesterday`, and `now` are supported.
 - The app creates a JSON state store automatically and skips papers already saved there.
+- Each processed paper is stored as its own JSON file under either `recommended-papers/<yymm>/` or `not-recommended-papers/<yymm>/`.
+- Each stored JSON uses the canonical arXiv identifier in `paper_id`, not the full arXiv URL.
+- Recommended papers are stored with full recommendation detail.
+- Nonrecommended papers are stored with only `paper_id`, `title`, and `url`.
 - Local default behavior is: save report `true`, send email `false`, save to DB `true`.
 - The GitHub Actions workflow overrides that default and enables email sending.
 - If no papers are found, the report says so directly.
