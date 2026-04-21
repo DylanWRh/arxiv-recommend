@@ -64,7 +64,8 @@ Common optional values:
 - `EMAIL_TO`: default email recipient
 - `OUTPUT_PATH`: default output path when saving a report
 - `RECOMMENDATIONS_STATE_DIR`: directory used to store recommendation state JSON files. Required when `SAVE_TO_DB=true`
-  The app writes one JSON file per paper under `recommended-papers/<yymm>/` or `not-recommended-papers/<yymm>/`.
+  Recommended papers are stored under `recommended-papers/<yymm>/<dd>.json`, one JSON per day.
+  Unrecommended papers are stored under `not-recommended-papers/<yymm>/<dd>.json`, one JSON per day.
 - `OPENAI_MODEL`: recommendation model
 - `TIME_PARSE_MODEL`: model used to normalize flexible time expressions
 - `OPENAI_BASE_URL`: API base URL for an OpenAI-compatible provider
@@ -256,7 +257,7 @@ python app.py --dbg
 | `--save-report`, `--no-save-report` | Enable or disable saving the Markdown report. Default: `true` |
 | `--send-email`, `--no-send-email` | Enable or disable sending email. Default: `false` |
 | `--save-to-db`, `--no-save-to-db` | Enable or disable writing processed papers to the JSON state store. Default: `false` |
-| `--state-dir` | Directory used to persist one JSON state file per paper under recommended and not-recommended `YYMM` folders |
+| `--state-dir` | Directory used to persist `recommended-papers/<yymm>/<dd>.json` and `not-recommended-papers/<yymm>/<dd>.json` |
 | `--llm-model` | Model used for recommendation and summarization |
 | `--time-parse-model` | Model used to normalize flexible time expressions |
 | `--llm-batch-size` | Number of papers evaluated per LLM batch |
@@ -269,12 +270,13 @@ python app.py --dbg
 - arXiv papers are fetched with `submittedDate` and sorted newest first.
 - Time expressions like `today`, `yesterday`, and `now` are supported.
 - The app creates a JSON state store automatically and skips papers already saved there.
-- Each processed paper is stored as its own JSON file under either `recommended-papers/<yymm>/` or `not-recommended-papers/<yymm>/`.
+- Recommended papers are grouped into one daily JSON file under `recommended-papers/<yymm>/<dd>.json`.
+- Unrecommended papers are grouped into one daily JSON file under `not-recommended-papers/<yymm>/<dd>.json`.
 - Each stored JSON uses the canonical arXiv identifier in `paper_id`, not the full arXiv URL.
 - Recommended papers are stored with full recommendation detail.
 - Recommended papers also include `review_status`, which starts as `unchecked`.
 - Allowed `review_status` values are `rejected`, `uninterested`, `unchecked`, `interested`, and `readed`.
-- Nonrecommended papers are stored with only `paper_id`, `title`, and `url`.
+- Nonrecommended paper entries store only `paper_id`, `title`, and `url`.
 - Local default behavior is: save report `true`, send email `false`, save to DB `false`.
 - If `SAVE_TO_DB=true`, you must also set `RECOMMENDATIONS_STATE_DIR` or pass `--state-dir`.
 - The GitHub Actions workflow overrides that default, enables database saving, checks out the private state repo into `data/`, and pushes the updated `data/` contents back to that repo.

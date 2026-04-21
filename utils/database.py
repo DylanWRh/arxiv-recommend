@@ -67,37 +67,89 @@ def _paper_yymm(paper_id: str) -> str:
     return "unknown"
 
 
-def _paper_record_filename(paper_id: str) -> str:
-    identifier = _canonical_paper_identifier(paper_id)
-    safe_identifier = identifier.replace("/", "__")
-    return f"{safe_identifier or 'unknown'}.json"
+def _normalize_timestamp(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc)
 
 
-def _paper_record_path(state_dir: str, paper_id: str, *, recommended: bool) -> str:
-    root_dir = _recommended_paper_records_dir(state_dir) if recommended else _unrecommended_paper_records_dir(state_dir)
-    return os.path.join(root_dir, _paper_yymm(paper_id), _paper_record_filename(paper_id))
+def _paper_date_parts(paper_id: str, timestamp: dt.datetime) -> tuple[str, str]:
+    normalized_timestamp = _normalize_timestamp(timestamp)
+    yymm = normalized_timestamp.strftime("%y%m") or _paper_yymm(paper_id)
+    day = normalized_timestamp.strftime("%d")
+    return yymm, day
 
-def _load_saved_paper_ids_from_paper_files(state_dir: str) -> set[str]:
-    saved_ids: set[str] = set()
-    for records_dir in (_recommended_paper_records_dir(state_dir), _unrecommended_paper_records_dir(state_dir)):
-        if not os.path.isdir(records_dir):
+
+def _day_record_path(state_dir: str, dirname: str, paper: Paper) -> tuple[str, str]:
+    normalized_timestamp = _normalize_timestamp(paper.published)
+    yymm, day = _paper_date_parts(paper.paper_id, normalized_timestamp)
+    return (
+        os.path.join(state_dir, dirname, yymm, f"{day}.json"),
+        normalized_timestamp.date().isoformat(),
+    )
+
+
+def _iter_json_record_paths(records_dir: str) -> list[str]:
+    record_paths: list[str] = []
+    if not os.path.isdir(records_dir):
+        return record_paths
+
+    for root, _, files in os.walk(records_dir):
+        for name in files:
+            if name.endswith(".json"):
+                record_paths.append(os.path.join(root, name))
+    record_paths.sort()
+    return record_paths
+
+
+def _load_day_record(path: str, fallback_date: str) -> tuple[str, dict[str, dict[str, object]]]:
+    payload = _load_json_file(path, {})
+    record_date = fallback_date
+    papers_by_id: dict[str, dict[str, object]] = {}
+
+    if not isinstance(payload, dict):
+        return record_date, papers_by_id
+
+    payload_date = str(payload.get("date", "")).strip()
+    if payload_date:
+        record_date = payload_date
+
+    papers_payload = payload.get("papers")
+    if not isinstance(papers_payload, list):
+        return record_date, papers_by_id
+
+    for entry in papers_payload:
+        if not isinstance(entry, dict):
             continue
-        for root, _, files in os.walk(records_dir):
-            for name in files:
-                if not name.endswith(".json"):
-                    continue
-                payload = _load_json_file(os.path.join(root, name), {})
-                if not isinstance(payload, dict):
-                    continue
-                paper_id = _canonical_paper_identifier(str(payload.get("paper_id", "")).strip())
-                if paper_id:
-                    saved_ids.add(paper_id)
+        paper_id = _canonical_paper_identifier(str(entry.get("paper_id", "")).strip())
+        if not paper_id:
+            continue
+        normalized_entry = dict(entry)
+        normalized_entry["paper_id"] = paper_id
+        papers_by_id[paper_id] = normalized_entry
+    return record_date, papers_by_id
+
+
+def _write_day_record(path: str, record_date: str, papers_by_id: dict[str, dict[str, object]]) -> None:
+    payload = {
+        "date": record_date,
+        "papers": sorted(papers_by_id.values(), key=lambda item: str(item.get("paper_id", ""))),
+    }
+    _write_json_file(path, payload)
+
+
+def _load_saved_paper_ids_from_records_dir(records_dir: str) -> set[str]:
+    saved_ids: set[str] = set()
+    for path in _iter_json_record_paths(records_dir):
+        _, papers_by_id = _load_day_record(path, "")
+        saved_ids.update(papers_by_id)
     return saved_ids
 
 
 def load_saved_paper_ids(state_dir: str, dbg: bool = False) -> set[str]:
     resolved_state_dir = ensure_recommendations_state_layout(state_dir)
-    saved_ids = _load_saved_paper_ids_from_paper_files(resolved_state_dir)
+    saved_ids = _load_saved_paper_ids_from_records_dir(_recommended_paper_records_dir(resolved_state_dir))
+    saved_ids.update(_load_saved_paper_ids_from_records_dir(_unrecommended_paper_records_dir(resolved_state_dir)))
     debug_log(dbg, f"Loaded {len(saved_ids)} saved paper id(s) from {resolved_state_dir}.")
     return saved_ids
 
@@ -181,10 +233,15 @@ def save_processed_papers_state(
             recommendation_by_id[paper_id] = recommendation
 
     recommended_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    grouped_records: dict[str, tuple[str, dict[str, dict[str, object]]]] = {}
 
     for paper_id, paper in new_papers_by_id.items():
-        is_recommended = paper_id in recommendation_by_id
-        if is_recommended:
+        if paper_id in recommendation_by_id:
+            record_path, record_date = _day_record_path(
+                resolved_state_dir,
+                RECOMMENDED_PAPER_RECORDS_DIRNAME,
+                paper,
+            )
             payload = _serialize_recommendation(
                 recommendation_by_id[paper_id],
                 start_utc=start_utc,
@@ -192,8 +249,21 @@ def save_processed_papers_state(
                 recommended_at=recommended_at,
             )
         else:
+            record_path, record_date = _day_record_path(
+                resolved_state_dir,
+                UNRECOMMENDED_PAPER_RECORDS_DIRNAME,
+                paper,
+            )
             payload = _serialize_paper_summary(paper)
-        _write_json_file(_paper_record_path(resolved_state_dir, paper_id, recommended=is_recommended), payload)
+
+        existing_date, existing_papers = grouped_records.get(record_path, (record_date, {}))
+        existing_papers[paper_id] = payload
+        grouped_records[record_path] = (existing_date or record_date, existing_papers)
+
+    for record_path, (record_date, new_papers) in grouped_records.items():
+        existing_date, existing_papers = _load_day_record(record_path, record_date)
+        existing_papers.update(new_papers)
+        _write_day_record(record_path, existing_date or record_date, existing_papers)
 
     inserted = len(new_papers_by_id)
     debug_log(

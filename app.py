@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--state-dir",
         dest="state_dir",
-        help="Directory used to store one JSON state file per paper under recommended/not-recommended YYMM folders.",
+        help="Directory used to store daily JSON state files under recommended/not-recommended YYMM folders.",
         default=str_env("RECOMMENDATIONS_STATE_DIR", ""),
     )
     parser.add_argument(
