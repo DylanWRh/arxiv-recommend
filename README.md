@@ -2,12 +2,12 @@
 
 ## Introduction
 
-This repo fetches newly submitted arXiv papers, asks an LLM which ones match your research interests, and produces a report you can save or email. It also keeps a small SQLite history so the same paper is not recommended twice.
+This repo fetches newly submitted arXiv papers, asks an LLM which ones match your research interests, and produces a report you can save or email. It also keeps a Git-friendly JSON history so the same paper is not recommended twice.
 
 The app repo and the state repo are split:
 
 - this repo stores the app code and workflow
-- the separate `arxiv-recommend-state` repo stores `data/recommendations.db`
+- the separate `arxiv-recommend-state` repo stores JSON state files under `data/`
 
 Each recommended paper includes:
 
@@ -59,10 +59,11 @@ Common optional values:
 - `APP_TIMEZONE`: timezone used when parsing inputs like `today`, `yesterday`, or `last Friday 9am`
 - `SAVE_REPORT`: whether to save a Markdown report locally. Default: `true`
 - `SEND_EMAIL`: whether to send email when running locally. Default: `false`
-- `SAVE_TO_DB`: whether to record recommended papers in the SQLite history DB. Default: `true`
+- `SAVE_TO_DB`: whether to record recommended papers in the JSON state store. Default: `true`
 - `EMAIL_TO`: default email recipient
 - `OUTPUT_PATH`: default output path when saving a report
-- `RECOMMENDATIONS_DB_PATH`: SQLite file used to store already recommended papers. Default: `data/recommendations.db`
+- `RECOMMENDATIONS_STATE_DIR`: directory used to store recommendation state JSON files. Default: `data`
+  The app writes per-run JSON records plus sharded `paper_id` index files under this directory.
 - `OPENAI_MODEL`: recommendation model
 - `TIME_PARSE_MODEL`: model used to normalize flexible time expressions
 - `OPENAI_BASE_URL`: API base URL for an OpenAI-compatible provider
@@ -96,7 +97,7 @@ What it does:
 - checks out the separate state repo into `data/`
 - builds a `.env` file from GitHub Actions variables and secrets
 - runs `python app.py --dbg --send-email`
-- commits the updated recommendations SQLite DB back to the state repo if it changed
+- commits updated state JSON files back to the state repo if they changed
 
 ### Daily execution time
 
@@ -129,7 +130,7 @@ Recommended repository variables:
 | `OPENAI_BASE_URL` | No | Base URL for your OpenAI-compatible provider |
 | `LLM_BATCH_SIZE` | No | Papers per LLM batch |
 | `LLM_TIMEOUT` | No | LLM timeout in seconds |
-| `RECOMMENDATIONS_DB_PATH` | No | SQLite history DB path. Default: `data/recommendations.db` |
+| `RECOMMENDATIONS_STATE_DIR` | No | State directory path. Default: `data` |
 | `SMTP_HOST` | No | SMTP server host |
 | `SMTP_PORT` | No | SMTP server port |
 | `SMTP_USE_TLS` | No | `true` or `false` |
@@ -226,8 +227,8 @@ python app.py --dbg
 | `--output` | Output file path or directory for the Markdown report |
 | `--save-report`, `--no-save-report` | Enable or disable saving the Markdown report. Default: `true` |
 | `--send-email`, `--no-send-email` | Enable or disable sending email. Default: `false` |
-| `--save-to-db`, `--no-save-to-db` | Enable or disable writing recommendations to the SQLite DB. Default: `true` |
-| `--db-path` | SQLite path used to persist already recommended papers |
+| `--save-to-db`, `--no-save-to-db` | Enable or disable writing recommendations to the JSON state store. Default: `true` |
+| `--state-dir` | Directory used to persist recommendation state JSON files |
 | `--llm-model` | Model used for recommendation and summarization |
 | `--time-parse-model` | Model used to normalize flexible time expressions |
 | `--llm-batch-size` | Number of papers evaluated per LLM batch |
@@ -239,7 +240,7 @@ python app.py --dbg
 
 - arXiv papers are fetched with `submittedDate` and sorted newest first.
 - Time expressions like `today`, `yesterday`, and `now` are supported.
-- The app creates a SQLite history DB automatically and skips papers already saved there.
+- The app creates a JSON state store automatically and skips papers already saved there.
 - Local default behavior is: save report `true`, send email `false`, save to DB `true`.
 - The GitHub Actions workflow overrides that default and enables email sending.
 - If no papers are found, the report says so directly.

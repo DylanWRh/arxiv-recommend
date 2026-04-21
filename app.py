@@ -6,9 +6,10 @@ import sys
 
 from utils.arxiv_client import fetch_arxiv_papers
 from utils.database import (
-    DEFAULT_RECOMMENDATIONS_DB_PATH,
+    DEFAULT_RECOMMENDATIONS_STATE_DIR,
     exclude_saved_papers,
     load_saved_paper_ids,
+    resolve_state_dir,
     save_recommendations_history,
 )
 from utils.emailing import build_email, send_email
@@ -72,12 +73,17 @@ def parse_args() -> argparse.Namespace:
         "--save-to-db",
         action=argparse.BooleanOptionalAction,
         default=bool_env("SAVE_TO_DB", True),
-        help="Whether to persist recommended papers to the SQLite database.",
+        help="Whether to persist recommended papers to the JSON state store.",
     )
     parser.add_argument(
+        "--state-dir",
         "--db-path",
-        help="SQLite database path used to remember already recommended papers.",
-        default=str_env("RECOMMENDATIONS_DB_PATH", DEFAULT_RECOMMENDATIONS_DB_PATH),
+        dest="state_dir",
+        help="Directory used to store recommendation history shards and run JSON files.",
+        default=str_env(
+            "RECOMMENDATIONS_STATE_DIR",
+            str_env("RECOMMENDATIONS_DB_PATH", DEFAULT_RECOMMENDATIONS_STATE_DIR),
+        ),
     )
     parser.add_argument(
         "--llm-model",
@@ -127,11 +133,11 @@ def main() -> int:
         print("No output actions are enabled. Enable at least one of --save-report, --send-email, or --save-to-db.")
         return 1
 
-    db_path = os.path.expanduser(args.db_path)
+    state_dir = resolve_state_dir(args.state_dir)
     try:
-        saved_paper_ids = load_saved_paper_ids(db_path, dbg=args.dbg)
+        saved_paper_ids = load_saved_paper_ids(state_dir, dbg=args.dbg)
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to open recommendations database: {exc}", file=sys.stderr)
+        print(f"Failed to open recommendations state store: {exc}", file=sys.stderr)
         return 1
 
     llm_batch_size = max(1, args.llm_batch_size)
@@ -168,7 +174,7 @@ def main() -> int:
     history_note: str | None = None
     if skipped_saved_count:
         history_note = (
-            f"Skipped {skipped_saved_count} paper(s) that were already saved in the recommendations database."
+            f"Skipped {skipped_saved_count} paper(s) that were already saved in the recommendations state store."
         )
         debug_log(
             args.dbg,
@@ -192,7 +198,7 @@ def main() -> int:
     )
     if fetched_paper_count > 0 and not papers and skipped_saved_count == fetched_paper_count:
         empty_message = (
-            f"All {fetched_paper_count} paper(s) in this time window were already saved in the recommendations database."
+            f"All {fetched_paper_count} paper(s) in this time window were already saved in the recommendations state store."
         )
 
     text_report, html_report, markdown_report = render_reports(
@@ -240,14 +246,14 @@ def main() -> int:
     if args.save_to_db:
         try:
             save_recommendations_history(
-                db_path=db_path,
+                state_dir=state_dir,
                 recommendations=recommendations,
                 start_utc=start_utc,
                 end_utc=end_utc,
                 dbg=args.dbg,
             )
         except Exception as exc:  # noqa: BLE001
-            print(f"Failed to update recommendations database: {exc}", file=sys.stderr)
+            print(f"Failed to update recommendations state store: {exc}", file=sys.stderr)
             return 1
 
     return 0

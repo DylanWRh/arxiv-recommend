@@ -59,6 +59,7 @@ jobs:
           APP_TIMEZONE: ${{ vars.APP_TIMEZONE }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           OUTPUT_PATH: ${{ vars.OUTPUT_PATH }}
+          RECOMMENDATIONS_STATE_DIR: ${{ vars.RECOMMENDATIONS_STATE_DIR }}
           RECOMMENDATIONS_DB_PATH: ${{ vars.RECOMMENDATIONS_DB_PATH }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
@@ -87,6 +88,7 @@ jobs:
           append_if_set APP_TIMEZONE "$APP_TIMEZONE"
           append_if_set EMAIL_TO "$EMAIL_TO"
           append_if_set OUTPUT_PATH "$OUTPUT_PATH"
+          append_if_set RECOMMENDATIONS_STATE_DIR "$RECOMMENDATIONS_STATE_DIR"
           append_if_set RECOMMENDATIONS_DB_PATH "$RECOMMENDATIONS_DB_PATH"
 
           append_if_set OPENAI_API_KEY "$OPENAI_API_KEY"
@@ -130,34 +132,17 @@ jobs:
       - name: Run app
         run: python app.py --dbg --send-email
 
-      - name: Commit recommendations database
+      - name: Commit recommendations state
         shell: bash
-        env:
-          RECOMMENDATIONS_DB_PATH: ${{ vars.RECOMMENDATIONS_DB_PATH }}
         run: |
-          db_path="${RECOMMENDATIONS_DB_PATH:-data/recommendations.db}"
-          case "$db_path" in
-            ./data/*) state_db_path="${db_path#./data/}" ;;
-            data/*) state_db_path="${db_path#data/}" ;;
-            *)
-              echo "RECOMMENDATIONS_DB_PATH must point inside data/: $db_path"
-              exit 1
-              ;;
-          esac
-
-          if [ ! -f "$db_path" ]; then
-            echo "No recommendations database found at $db_path."
-            exit 0
-          fi
-
           git -C data config user.name "github-actions[bot]"
           git -C data config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C data add "$state_db_path"
+          git -C data add .
 
           if git -C data diff --cached --quiet; then
-            echo "Recommendations database unchanged."
+            echo "State repo unchanged."
             exit 0
           fi
 
-          git -C data commit -m "Update recommendations database"
+          git -C data commit -m "Update recommendations state"
           git -C data push
