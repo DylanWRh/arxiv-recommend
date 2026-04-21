@@ -5,11 +5,15 @@ on:
     - cron: '5 12 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: daily-paper-recommender
+  cancel-in-progress: false
+
 jobs:
   run-app:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +43,7 @@ jobs:
           APP_TIMEZONE: ${{ vars.APP_TIMEZONE }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           OUTPUT_PATH: ${{ vars.OUTPUT_PATH }}
+          RECOMMENDATIONS_DB_PATH: ${{ vars.RECOMMENDATIONS_DB_PATH }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           TIME_PARSE_MODEL: ${{ vars.TIME_PARSE_MODEL }}
@@ -66,6 +71,7 @@ jobs:
           append_if_set APP_TIMEZONE "$APP_TIMEZONE"
           append_if_set EMAIL_TO "$EMAIL_TO"
           append_if_set OUTPUT_PATH "$OUTPUT_PATH"
+          append_if_set RECOMMENDATIONS_DB_PATH "$RECOMMENDATIONS_DB_PATH"
 
           append_if_set OPENAI_API_KEY "$OPENAI_API_KEY"
           append_if_set OPENAI_MODEL "$OPENAI_MODEL"
@@ -106,4 +112,27 @@ jobs:
           require_real_value EMAIL_FROM "your-gmail-address@gmail.com"
 
       - name: Run app
-        run: python app.py --dbg
+        run: python app.py --dbg --send-email
+
+      - name: Commit recommendations database
+        shell: bash
+        env:
+          RECOMMENDATIONS_DB_PATH: ${{ vars.RECOMMENDATIONS_DB_PATH }}
+        run: |
+          db_path="${RECOMMENDATIONS_DB_PATH:-data/recommendations.db}"
+          if [ ! -f "$db_path" ]; then
+            echo "No recommendations database found at $db_path."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$db_path"
+
+          if git diff --cached --quiet; then
+            echo "Recommendations database unchanged."
+            exit 0
+          fi
+
+          git commit -m "Update recommendations database"
+          git push

@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This repo fetches newly submitted arXiv papers, asks an LLM which ones match your research interests, and produces a report you can save or email.
+This repo fetches newly submitted arXiv papers, asks an LLM which ones match your research interests, and produces a report you can save or email. It also keeps a small SQLite history so the same paper is not recommended twice.
 
 Each recommended paper includes:
 
@@ -46,8 +46,12 @@ Minimum required values for a normal local run:
 Common optional values:
 
 - `APP_TIMEZONE`: timezone used when parsing inputs like `today`, `yesterday`, or `last Friday 9am`
+- `SAVE_REPORT`: whether to save a Markdown report locally. Default: `true`
+- `SEND_EMAIL`: whether to send email when running locally. Default: `false`
+- `SAVE_TO_DB`: whether to record recommended papers in the SQLite history DB. Default: `true`
 - `EMAIL_TO`: default email recipient
 - `OUTPUT_PATH`: default output path when saving a report
+- `RECOMMENDATIONS_DB_PATH`: SQLite file used to store already recommended papers. Default: `data/recommendations.db`
 - `OPENAI_MODEL`: recommendation model
 - `TIME_PARSE_MODEL`: model used to normalize flexible time expressions
 - `OPENAI_BASE_URL`: API base URL for an OpenAI-compatible provider
@@ -79,7 +83,8 @@ What it does:
 - can also be started manually with `workflow_dispatch`
 - installs Python 3.11 and dependencies
 - builds a `.env` file from GitHub Actions variables and secrets
-- runs `python app.py --dbg`
+- runs `python app.py --dbg --send-email`
+- commits the updated recommendations SQLite DB back to the repo if it changed
 
 ### Daily execution time
 
@@ -112,6 +117,7 @@ Recommended repository variables:
 | `OPENAI_BASE_URL` | No | Base URL for your OpenAI-compatible provider |
 | `LLM_BATCH_SIZE` | No | Papers per LLM batch |
 | `LLM_TIMEOUT` | No | LLM timeout in seconds |
+| `RECOMMENDATIONS_DB_PATH` | No | SQLite history DB path. Default: `data/recommendations.db` |
 | `SMTP_HOST` | No | SMTP server host |
 | `SMTP_PORT` | No | SMTP server port |
 | `SMTP_USE_TLS` | No | `true` or `false` |
@@ -183,6 +189,7 @@ python app.py \
   --research-profile "I focus on retrieval-augmented generation and evaluation for LLM systems." \
   --start "yesterday" \
   --end "now" \
+  --send-email \
   --to "you@example.com"
 ```
 
@@ -201,19 +208,26 @@ python app.py --dbg
 | `--end` | Flexible end time such as `now`, `today`, or `2026-04-02 23:59` |
 | `--timezone` | Timezone used for parsing flexible times. Defaults to `APP_TIMEZONE` or `UTC` |
 | `--max-results` | Maximum number of arXiv papers to fetch. Default: `2000` |
-| `--to` | Email recipient. If omitted, the report is saved instead of emailed |
-| `--output` | Output file path or directory. If you also use `--to`, the app sends email and saves a local copy |
+| `--to` | Email recipient used when email sending is enabled |
+| `--output` | Output file path or directory for the Markdown report |
+| `--save-report`, `--no-save-report` | Enable or disable saving the Markdown report. Default: `true` |
+| `--send-email`, `--no-send-email` | Enable or disable sending email. Default: `false` |
+| `--save-to-db`, `--no-save-to-db` | Enable or disable writing recommendations to the SQLite DB. Default: `true` |
+| `--db-path` | SQLite path used to persist already recommended papers |
 | `--llm-model` | Model used for recommendation and summarization |
 | `--time-parse-model` | Model used to normalize flexible time expressions |
 | `--llm-batch-size` | Number of papers evaluated per LLM batch |
 | `--llm-timeout` | Timeout for LLM requests in seconds |
-| `--dry-run` | Builds the result but does not send email. If `--to` is set, prints the MIME email instead |
+| `--dry-run` | Builds the result but does not send email. If email sending is enabled, prints the MIME email instead |
 | `--dbg` | Prints debug logs |
 
 ### Behavior summary
 
 - arXiv papers are fetched with `submittedDate` and sorted newest first.
 - Time expressions like `today`, `yesterday`, and `now` are supported.
+- The app creates a SQLite history DB automatically and skips papers already saved there.
+- Local default behavior is: save report `true`, send email `false`, save to DB `true`.
+- The GitHub Actions workflow overrides that default and enables email sending.
 - If no papers are found, the report says so directly.
 - If the LLM finds no relevant papers, the report says so directly.
 - If the LLM request fails, the report is still generated, but without recommendations.
