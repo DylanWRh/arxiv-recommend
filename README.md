@@ -4,6 +4,11 @@
 
 This repo fetches newly submitted arXiv papers, asks an LLM which ones match your research interests, and produces a report you can save or email. It also keeps a small SQLite history so the same paper is not recommended twice.
 
+The app repo and the state repo are split:
+
+- this repo stores the app code and workflow
+- the separate `arxiv-recommend-state` repo stores `data/recommendations.db`
+
 Each recommended paper includes:
 
 - a relevance score
@@ -36,6 +41,12 @@ Copy the example file and edit it:
 
 ```bash
 cp .env.example .env
+```
+
+Clone the state repo into `data/`:
+
+```bash
+git clone https://github.com/DylanWRh/arxiv-recommend-state.git data
 ```
 
 Minimum required values for a normal local run:
@@ -82,9 +93,10 @@ What it does:
 - runs every day on the GitHub Actions schedule
 - can also be started manually with `workflow_dispatch`
 - installs Python 3.11 and dependencies
+- checks out the separate state repo into `data/`
 - builds a `.env` file from GitHub Actions variables and secrets
 - runs `python app.py --dbg --send-email`
-- commits the updated recommendations SQLite DB back to the repo if it changed
+- commits the updated recommendations SQLite DB back to the state repo if it changed
 
 ### Daily execution time
 
@@ -128,6 +140,7 @@ Required repository secrets for the current workflow:
 | Name | Required | Purpose |
 | --- | --- | --- |
 | `OPENAI_API_KEY` | Yes | API key for the LLM provider |
+| `STATE_REPO_TOKEN` | Yes | Token used to clone and push `DylanWRh/arxiv-recommend-state` |
 | `EMAIL_TO` | Yes | Recipient email address for the daily report |
 | `SMTP_USER` | Yes | SMTP login username |
 | `SMTP_PASS` | Yes | SMTP login password or app password |
@@ -136,10 +149,11 @@ Required repository secrets for the current workflow:
 Practical notes:
 
 - `EMAIL_TO` is the receiver of the report.
+- `STATE_REPO_TOKEN` should have access to the separate state repo.
 - `EMAIL_FROM` is the sender shown in the email.
 - `EMAIL_FROM` is often the same as `SMTP_USER`, but that depends on your mail provider.
 - If you use Gmail, you can usually keep `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, and `SMTP_USE_TLS=true`.
-- The workflow copies `.env.example` first, then overrides values from GitHub Actions variables and secrets.
+- The workflow checks out `DylanWRh/arxiv-recommend-state` into `data/`, then copies `.env.example` and overrides values from GitHub Actions variables and secrets.
 
 ### Recommended Actions setup for Gmail
 
