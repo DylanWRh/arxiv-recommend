@@ -252,13 +252,7 @@ def main() -> int:
             print(f"Sent report to {args.to} with {len(recommendations)} recommendation(s).")
 
     if args.save_to_db:
-        if state_dir is None:
-            print(
-                "Database saving is enabled but no state directory was configured. "
-                "Set --state-dir or RECOMMENDATIONS_STATE_DIR.",
-                file=sys.stderr,
-            )
-            return 1
+        assert state_dir is not None
         try:
             save_processed_papers_state(
                 state_dir=state_dir,

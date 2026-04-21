@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import re
 
 from utils.models import Paper, Recommendation
 from utils.runtime import debug_log
@@ -11,6 +10,10 @@ from utils.runtime import debug_log
 DEFAULT_RECOMMENDATIONS_STATE_DIR = "data"
 RECOMMENDED_PAPER_RECORDS_DIRNAME = "recommended-papers"
 UNRECOMMENDED_PAPER_RECORDS_DIRNAME = "not-recommended-papers"
+STATE_RECORD_DIRNAMES = (
+    RECOMMENDED_PAPER_RECORDS_DIRNAME,
+    UNRECOMMENDED_PAPER_RECORDS_DIRNAME,
+)
 DEFAULT_RECOMMENDED_PAPER_REVIEW_STATUS = "unchecked"
 
 
@@ -19,18 +22,14 @@ def resolve_state_dir(path: str) -> str:
     return resolved or DEFAULT_RECOMMENDATIONS_STATE_DIR
 
 
-def _recommended_paper_records_dir(state_dir: str) -> str:
-    return os.path.join(state_dir, RECOMMENDED_PAPER_RECORDS_DIRNAME)
-
-
-def _unrecommended_paper_records_dir(state_dir: str) -> str:
-    return os.path.join(state_dir, UNRECOMMENDED_PAPER_RECORDS_DIRNAME)
+def _records_dir(state_dir: str, dirname: str) -> str:
+    return os.path.join(state_dir, dirname)
 
 
 def ensure_recommendations_state_layout(state_dir: str) -> str:
     resolved_state_dir = resolve_state_dir(state_dir)
-    os.makedirs(_recommended_paper_records_dir(resolved_state_dir), exist_ok=True)
-    os.makedirs(_unrecommended_paper_records_dir(resolved_state_dir), exist_ok=True)
+    for dirname in STATE_RECORD_DIRNAMES:
+        os.makedirs(_records_dir(resolved_state_dir, dirname), exist_ok=True)
     return resolved_state_dir
 
 
@@ -59,33 +58,17 @@ def _canonical_paper_identifier(paper_id: str) -> str:
     return normalized.strip().strip("/")
 
 
-def _paper_yymm(paper_id: str) -> str:
-    identifier = _canonical_paper_identifier(paper_id)
-    match = re.match(r"(?:[^/]+/)?(?P<yymm>\d{4})", identifier)
-    if match:
-        return match.group("yymm")
-    return "unknown"
-
-
-def _normalize_timestamp(value: dt.datetime) -> dt.datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=dt.timezone.utc)
-    return value.astimezone(dt.timezone.utc)
-
-
-def _paper_date_parts(paper_id: str, timestamp: dt.datetime) -> tuple[str, str]:
-    normalized_timestamp = _normalize_timestamp(timestamp)
-    yymm = normalized_timestamp.strftime("%y%m") or _paper_yymm(paper_id)
-    day = normalized_timestamp.strftime("%d")
-    return yymm, day
-
-
 def _day_record_path(state_dir: str, dirname: str, paper: Paper) -> tuple[str, str]:
-    normalized_timestamp = _normalize_timestamp(paper.published)
-    yymm, day = _paper_date_parts(paper.paper_id, normalized_timestamp)
+    published_at = paper.published
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=dt.timezone.utc)
+    else:
+        published_at = published_at.astimezone(dt.timezone.utc)
+    yymm = published_at.strftime("%y%m")
+    day = published_at.strftime("%d")
     return (
-        os.path.join(state_dir, dirname, yymm, f"{day}.json"),
-        normalized_timestamp.date().isoformat(),
+        os.path.join(_records_dir(state_dir, dirname), yymm, f"{day}.json"),
+        published_at.date().isoformat(),
     )
 
 
@@ -147,9 +130,10 @@ def _load_saved_paper_ids_from_records_dir(records_dir: str) -> set[str]:
 
 
 def load_saved_paper_ids(state_dir: str, dbg: bool = False) -> set[str]:
-    resolved_state_dir = ensure_recommendations_state_layout(state_dir)
-    saved_ids = _load_saved_paper_ids_from_records_dir(_recommended_paper_records_dir(resolved_state_dir))
-    saved_ids.update(_load_saved_paper_ids_from_records_dir(_unrecommended_paper_records_dir(resolved_state_dir)))
+    resolved_state_dir = resolve_state_dir(state_dir)
+    saved_ids: set[str] = set()
+    for dirname in STATE_RECORD_DIRNAMES:
+        saved_ids.update(_load_saved_paper_ids_from_records_dir(_records_dir(resolved_state_dir, dirname)))
     debug_log(dbg, f"Loaded {len(saved_ids)} saved paper id(s) from {resolved_state_dir}.")
     return saved_ids
 
