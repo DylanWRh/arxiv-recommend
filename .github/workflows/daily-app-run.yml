@@ -59,8 +59,6 @@ jobs:
           APP_TIMEZONE: ${{ vars.APP_TIMEZONE }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           OUTPUT_PATH: ${{ vars.OUTPUT_PATH }}
-          RECOMMENDATIONS_STATE_DIR: ${{ vars.RECOMMENDATIONS_STATE_DIR }}
-          RECOMMENDATIONS_DB_PATH: ${{ vars.RECOMMENDATIONS_DB_PATH }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           TIME_PARSE_MODEL: ${{ vars.TIME_PARSE_MODEL }}
@@ -88,8 +86,8 @@ jobs:
           append_if_set APP_TIMEZONE "$APP_TIMEZONE"
           append_if_set EMAIL_TO "$EMAIL_TO"
           append_if_set OUTPUT_PATH "$OUTPUT_PATH"
-          append_if_set RECOMMENDATIONS_STATE_DIR "$RECOMMENDATIONS_STATE_DIR"
-          append_if_set RECOMMENDATIONS_DB_PATH "$RECOMMENDATIONS_DB_PATH"
+          append_if_set SAVE_TO_DB "true"
+          append_if_set RECOMMENDATIONS_STATE_DIR "./data"
 
           append_if_set OPENAI_API_KEY "$OPENAI_API_KEY"
           append_if_set OPENAI_MODEL "$OPENAI_MODEL"

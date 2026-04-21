@@ -11,19 +11,12 @@ from utils.runtime import debug_log
 DEFAULT_RECOMMENDATIONS_STATE_DIR = "data"
 RECOMMENDED_PAPER_RECORDS_DIRNAME = "recommended-papers"
 UNRECOMMENDED_PAPER_RECORDS_DIRNAME = "not-recommended-papers"
-LEGACY_PAPER_RECORDS_DIRNAME = "papers"
-LEGACY_PAPER_ID_SHARDS_DIRNAME = "paper-id-shards"
-LEGACY_RECOMMENDATION_RUNS_DIRNAME = "recommendation-runs"
+DEFAULT_RECOMMENDED_PAPER_REVIEW_STATUS = "unchecked"
 
 
 def resolve_state_dir(path: str) -> str:
     resolved = os.path.expanduser(path).strip()
-    if not resolved:
-        return DEFAULT_RECOMMENDATIONS_STATE_DIR
-    if resolved.lower().endswith(".db"):
-        parent = os.path.dirname(resolved)
-        return parent or DEFAULT_RECOMMENDATIONS_STATE_DIR
-    return resolved
+    return resolved or DEFAULT_RECOMMENDATIONS_STATE_DIR
 
 
 def _recommended_paper_records_dir(state_dir: str) -> str:
@@ -32,18 +25,6 @@ def _recommended_paper_records_dir(state_dir: str) -> str:
 
 def _unrecommended_paper_records_dir(state_dir: str) -> str:
     return os.path.join(state_dir, UNRECOMMENDED_PAPER_RECORDS_DIRNAME)
-
-
-def _legacy_paper_records_dir(state_dir: str) -> str:
-    return os.path.join(state_dir, LEGACY_PAPER_RECORDS_DIRNAME)
-
-
-def _legacy_paper_id_shards_dir(state_dir: str) -> str:
-    return os.path.join(state_dir, LEGACY_PAPER_ID_SHARDS_DIRNAME)
-
-
-def _legacy_recommendation_runs_dir(state_dir: str) -> str:
-    return os.path.join(state_dir, LEGACY_RECOMMENDATION_RUNS_DIRNAME)
 
 
 def ensure_recommendations_state_layout(state_dir: str) -> str:
@@ -96,18 +77,9 @@ def _paper_record_path(state_dir: str, paper_id: str, *, recommended: bool) -> s
     root_dir = _recommended_paper_records_dir(state_dir) if recommended else _unrecommended_paper_records_dir(state_dir)
     return os.path.join(root_dir, _paper_yymm(paper_id), _paper_record_filename(paper_id))
 
-
-def _paper_record_dirs(state_dir: str) -> tuple[str, ...]:
-    return (
-        _recommended_paper_records_dir(state_dir),
-        _unrecommended_paper_records_dir(state_dir),
-        _legacy_paper_records_dir(state_dir),
-    )
-
-
 def _load_saved_paper_ids_from_paper_files(state_dir: str) -> set[str]:
     saved_ids: set[str] = set()
-    for records_dir in _paper_record_dirs(state_dir):
+    for records_dir in (_recommended_paper_records_dir(state_dir), _unrecommended_paper_records_dir(state_dir)):
         if not os.path.isdir(records_dir):
             continue
         for root, _, files in os.walk(records_dir):
@@ -123,74 +95,9 @@ def _load_saved_paper_ids_from_paper_files(state_dir: str) -> set[str]:
     return saved_ids
 
 
-def _load_saved_paper_ids_from_legacy_shards(state_dir: str) -> set[str]:
-    shard_dir = _legacy_paper_id_shards_dir(state_dir)
-    if not os.path.isdir(shard_dir):
-        return set()
-
-    saved_ids: set[str] = set()
-    for name in sorted(os.listdir(shard_dir)):
-        if not name.endswith(".json"):
-            continue
-        path = os.path.join(shard_dir, name)
-        payload = _load_json_file(path, {})
-        if not isinstance(payload, dict):
-            continue
-
-        papers_payload = payload.get("papers")
-        if isinstance(papers_payload, dict):
-            for raw_paper_id, value in papers_payload.items():
-                paper_id = _canonical_paper_identifier(str(raw_paper_id).strip())
-                if not paper_id and isinstance(value, dict):
-                    paper_id = _canonical_paper_identifier(str(value.get("paper_id", "")).strip())
-                if paper_id:
-                    saved_ids.add(paper_id)
-
-        paper_ids = payload.get("paper_ids")
-        if isinstance(paper_ids, list):
-            for raw_paper_id in paper_ids:
-                paper_id = _canonical_paper_identifier(str(raw_paper_id).strip())
-                if paper_id:
-                    saved_ids.add(paper_id)
-
-    return saved_ids
-
-
-def _load_saved_paper_ids_from_legacy_runs(state_dir: str) -> set[str]:
-    runs_dir = _legacy_recommendation_runs_dir(state_dir)
-    if not os.path.isdir(runs_dir):
-        return set()
-
-    saved_ids: set[str] = set()
-    for root, _, files in os.walk(runs_dir):
-        for name in files:
-            if not name.endswith(".json"):
-                continue
-            payload = _load_json_file(os.path.join(root, name), {})
-            if not isinstance(payload, dict):
-                continue
-
-            for key in ("recommended_papers", "not_recommended_papers", "recommendations"):
-                entries = payload.get(key, [])
-                if not isinstance(entries, list):
-                    continue
-                for entry in entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    paper_id = _canonical_paper_identifier(str(entry.get("paper_id", "")).strip())
-                    if paper_id:
-                        saved_ids.add(paper_id)
-
-    return saved_ids
-
-
 def load_saved_paper_ids(state_dir: str, dbg: bool = False) -> set[str]:
     resolved_state_dir = ensure_recommendations_state_layout(state_dir)
-
     saved_ids = _load_saved_paper_ids_from_paper_files(resolved_state_dir)
-    saved_ids.update(_load_saved_paper_ids_from_legacy_shards(resolved_state_dir))
-    saved_ids.update(_load_saved_paper_ids_from_legacy_runs(resolved_state_dir))
-
     debug_log(dbg, f"Loaded {len(saved_ids)} saved paper id(s) from {resolved_state_dir}.")
     return saved_ids
 
@@ -223,6 +130,7 @@ def _serialize_recommendation(
         "query_window_start": start_utc.isoformat(),
         "reason": recommendation.reason,
         "recommended_at": recommended_at,
+        "review_status": DEFAULT_RECOMMENDED_PAPER_REVIEW_STATUS,
         "score": recommendation.score,
         "summary": recommendation.summary,
         "title": paper.title,
@@ -296,21 +204,3 @@ def save_processed_papers_state(
         ),
     )
     return inserted
-
-
-def save_recommendations_history(
-    state_dir: str,
-    recommendations: list[Recommendation],
-    start_utc: dt.datetime,
-    end_utc: dt.datetime,
-    dbg: bool = False,
-) -> int:
-    papers = [recommendation.paper for recommendation in recommendations]
-    return save_processed_papers_state(
-        state_dir=state_dir,
-        processed_papers=papers,
-        recommendations=recommendations,
-        start_utc=start_utc,
-        end_utc=end_utc,
-        dbg=dbg,
-    )

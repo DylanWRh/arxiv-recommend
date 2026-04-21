@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from utils.arxiv_client import fetch_arxiv_papers
 from utils.database import (
-    DEFAULT_RECOMMENDATIONS_STATE_DIR,
     exclude_saved_papers,
     load_saved_paper_ids,
     resolve_state_dir,
@@ -72,18 +70,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-to-db",
         action=argparse.BooleanOptionalAction,
-        default=bool_env("SAVE_TO_DB", True),
+        default=bool_env("SAVE_TO_DB", False),
         help="Whether to persist processed papers to the JSON state store.",
     )
     parser.add_argument(
         "--state-dir",
-        "--db-path",
         dest="state_dir",
         help="Directory used to store one JSON state file per paper under recommended/not-recommended YYMM folders.",
-        default=str_env(
-            "RECOMMENDATIONS_STATE_DIR",
-            str_env("RECOMMENDATIONS_DB_PATH", DEFAULT_RECOMMENDATIONS_STATE_DIR),
-        ),
+        default=str_env("RECOMMENDATIONS_STATE_DIR", ""),
     )
     parser.add_argument(
         "--llm-model",
@@ -133,12 +127,26 @@ def main() -> int:
         print("No output actions are enabled. Enable at least one of --save-report, --send-email, or --save-to-db.")
         return 1
 
-    state_dir = resolve_state_dir(args.state_dir)
-    try:
-        saved_paper_ids = load_saved_paper_ids(state_dir, dbg=args.dbg)
-    except Exception as exc:  # noqa: BLE001
-        print(f"Failed to open recommendations state store: {exc}", file=sys.stderr)
+    raw_state_dir = args.state_dir.strip()
+    if args.save_to_db and not raw_state_dir:
+        print(
+            "Database saving is enabled but no state directory was configured. "
+            "Set --state-dir or RECOMMENDATIONS_STATE_DIR.",
+            file=sys.stderr,
+        )
         return 1
+
+    state_dir: str | None = None
+    saved_paper_ids: set[str] = set()
+    if raw_state_dir:
+        state_dir = resolve_state_dir(raw_state_dir)
+        try:
+            saved_paper_ids = load_saved_paper_ids(state_dir, dbg=args.dbg)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Failed to open recommendations state store: {exc}", file=sys.stderr)
+            return 1
+    else:
+        debug_log(args.dbg, "No recommendations state directory configured; skipping state-based filtering.")
 
     llm_batch_size = max(1, args.llm_batch_size)
     llm_timeout = max(5, args.llm_timeout)
@@ -244,6 +252,13 @@ def main() -> int:
             print(f"Sent report to {args.to} with {len(recommendations)} recommendation(s).")
 
     if args.save_to_db:
+        if state_dir is None:
+            print(
+                "Database saving is enabled but no state directory was configured. "
+                "Set --state-dir or RECOMMENDATIONS_STATE_DIR.",
+                file=sys.stderr,
+            )
+            return 1
         try:
             save_processed_papers_state(
                 state_dir=state_dir,

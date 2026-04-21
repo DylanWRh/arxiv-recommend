@@ -17,6 +17,7 @@ Each recommended paper includes:
 - a Chinese title
 - a Chinese abstract summary
 - a short explanation of why it matches your interests
+- a `review_status` field for manual tracking
 
 If you do not pass `--start` and `--end`, the app automatically queries the latest fully announced arXiv submission window.
 
@@ -43,7 +44,7 @@ Copy the example file and edit it:
 cp .env.example .env
 ```
 
-Clone the state repo into `data/`:
+If you want to use the private JSON state store, clone the state repo into `data/`:
 
 ```bash
 git clone https://github.com/DylanWRh/arxiv-recommend-state.git data
@@ -59,10 +60,10 @@ Common optional values:
 - `APP_TIMEZONE`: timezone used when parsing inputs like `today`, `yesterday`, or `last Friday 9am`
 - `SAVE_REPORT`: whether to save a Markdown report locally. Default: `true`
 - `SEND_EMAIL`: whether to send email when running locally. Default: `false`
-- `SAVE_TO_DB`: whether to record processed papers in the JSON state store. Default: `true`
+- `SAVE_TO_DB`: whether to record processed papers in the JSON state store. Default: `false`
 - `EMAIL_TO`: default email recipient
 - `OUTPUT_PATH`: default output path when saving a report
-- `RECOMMENDATIONS_STATE_DIR`: directory used to store recommendation state JSON files. Default: `data`
+- `RECOMMENDATIONS_STATE_DIR`: directory used to store recommendation state JSON files. Required when `SAVE_TO_DB=true`
   The app writes one JSON file per paper under `recommended-papers/<yymm>/` or `not-recommended-papers/<yymm>/`.
 - `OPENAI_MODEL`: recommendation model
 - `TIME_PARSE_MODEL`: model used to normalize flexible time expressions
@@ -85,6 +86,33 @@ Notes:
 - `.env.example` also defaults to Gmail SMTP: `smtp.gmail.com:587` with STARTTLS.
 - For Gmail, `SMTP_PASS` should be a Google App Password, not your normal account password.
 
+### Private database directory
+
+Database writes are disabled by default for local runs.
+
+To enable the private state store locally:
+
+1. Clone your private state repo somewhere local, for example `./data`.
+2. Set `SAVE_TO_DB=true`.
+3. Set `RECOMMENDATIONS_STATE_DIR` to that private repo path.
+
+Example:
+
+```bash
+git clone https://github.com/DylanWRh/arxiv-recommend-state.git data
+```
+
+```dotenv
+SAVE_TO_DB=true
+RECOMMENDATIONS_STATE_DIR=./data
+```
+
+You can also enable it per run:
+
+```bash
+python app.py --save-to-db --state-dir ./data
+```
+
 ## GitHub Actions Daily Recommendation Setup
 
 The workflow file is `.github/workflows/daily-app-run.yml`.
@@ -96,8 +124,9 @@ What it does:
 - installs Python 3.11 and dependencies
 - checks out the separate state repo into `data/`
 - builds a `.env` file from GitHub Actions variables and secrets
+- forces `SAVE_TO_DB=true` and `RECOMMENDATIONS_STATE_DIR=./data`
 - runs `python app.py --dbg --send-email`
-- commits updated state JSON files back to the state repo if they changed
+- commits updated `data/` contents back to the state repo if they changed
 
 ### Daily execution time
 
@@ -130,7 +159,6 @@ Recommended repository variables:
 | `OPENAI_BASE_URL` | No | Base URL for your OpenAI-compatible provider |
 | `LLM_BATCH_SIZE` | No | Papers per LLM batch |
 | `LLM_TIMEOUT` | No | LLM timeout in seconds |
-| `RECOMMENDATIONS_STATE_DIR` | No | State directory path. Default: `data` |
 | `SMTP_HOST` | No | SMTP server host |
 | `SMTP_PORT` | No | SMTP server port |
 | `SMTP_USE_TLS` | No | `true` or `false` |
@@ -154,7 +182,7 @@ Practical notes:
 - `EMAIL_FROM` is the sender shown in the email.
 - `EMAIL_FROM` is often the same as `SMTP_USER`, but that depends on your mail provider.
 - If you use Gmail, you can usually keep `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, and `SMTP_USE_TLS=true`.
-- The workflow checks out `DylanWRh/arxiv-recommend-state` into `data/`, then copies `.env.example` and overrides values from GitHub Actions variables and secrets.
+- The workflow checks out `DylanWRh/arxiv-recommend-state` into `data/`, then copies `.env.example`, sets `SAVE_TO_DB=true`, and writes `RECOMMENDATIONS_STATE_DIR=./data`.
 
 ### Recommended Actions setup for Gmail
 
@@ -227,7 +255,7 @@ python app.py --dbg
 | `--output` | Output file path or directory for the Markdown report |
 | `--save-report`, `--no-save-report` | Enable or disable saving the Markdown report. Default: `true` |
 | `--send-email`, `--no-send-email` | Enable or disable sending email. Default: `false` |
-| `--save-to-db`, `--no-save-to-db` | Enable or disable writing processed papers to the JSON state store. Default: `true` |
+| `--save-to-db`, `--no-save-to-db` | Enable or disable writing processed papers to the JSON state store. Default: `false` |
 | `--state-dir` | Directory used to persist one JSON state file per paper under recommended and not-recommended `YYMM` folders |
 | `--llm-model` | Model used for recommendation and summarization |
 | `--time-parse-model` | Model used to normalize flexible time expressions |
@@ -244,9 +272,12 @@ python app.py --dbg
 - Each processed paper is stored as its own JSON file under either `recommended-papers/<yymm>/` or `not-recommended-papers/<yymm>/`.
 - Each stored JSON uses the canonical arXiv identifier in `paper_id`, not the full arXiv URL.
 - Recommended papers are stored with full recommendation detail.
+- Recommended papers also include `review_status`, which starts as `unchecked`.
+- Allowed `review_status` values are `rejected`, `uninterested`, `unchecked`, `interested`, and `readed`.
 - Nonrecommended papers are stored with only `paper_id`, `title`, and `url`.
-- Local default behavior is: save report `true`, send email `false`, save to DB `true`.
-- The GitHub Actions workflow overrides that default and enables email sending.
+- Local default behavior is: save report `true`, send email `false`, save to DB `false`.
+- If `SAVE_TO_DB=true`, you must also set `RECOMMENDATIONS_STATE_DIR` or pass `--state-dir`.
+- The GitHub Actions workflow overrides that default, enables database saving, checks out the private state repo into `data/`, and pushes the updated `data/` contents back to that repo.
 - If no papers are found, the report says so directly.
 - If the LLM finds no relevant papers, the report says so directly.
 - If the LLM request fails, the report is still generated, but without recommendations.
