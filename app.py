@@ -217,6 +217,7 @@ def main() -> int:
         method_label=method_label,
         empty_message=empty_message,
         history_note=history_note,
+        include_paper_abstract=True,
     )
     debug_log(args.dbg, "Rendered text, HTML, and markdown reports.")
 
@@ -236,7 +237,17 @@ def main() -> int:
             return 1
 
         debug_log(args.dbg, "Building email message.")
-        message = build_email(args.to, start_utc, end_utc, text_report, html_report)
+        email_text_report, email_html_report, _ = render_reports(
+            start_utc=start_utc,
+            end_utc=end_utc,
+            research_profile=research_profile,
+            recommendations=recommendations,
+            method_label=method_label,
+            empty_message=empty_message,
+            history_note=history_note,
+            include_paper_abstract=False,
+        )
+        message = build_email(args.to, start_utc, end_utc, email_text_report, email_html_report)
 
         if args.dry_run:
             debug_log(args.dbg, "Dry-run enabled; printing MIME message instead of sending.")

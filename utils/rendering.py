@@ -15,22 +15,24 @@ def format_score(score: float) -> str:
     return f"{score:.2f}"
 
 
-def _rec_rows(rec: Recommendation) -> list[tuple[str, str]]:
+def _rec_rows(rec: Recommendation, include_paper_abstract: bool = True) -> list[tuple[str, str]]:
     paper = rec.paper
     authors = ", ".join(paper.authors) if paper.authors else "Unknown authors"
     matched = ", ".join(rec.matched_interests) if rec.matched_interests else "None"
-    return [
+    rows = [
         ("Chinese title", rec.title_zh),
         ("Authors", authors),
         ("Published", paper.published.isoformat()),
         ("Relevance score", format_score(rec.score)),
         ("Matched concepts", matched),
         ("Why selected", rec.reason),
-        ("Original abstract", paper.abstract),
         ("LLM summary", rec.llm_summary),
         ("Chinese summary", rec.summary_zh),
         ("URL", paper.link),
     ]
+    if include_paper_abstract:
+        rows.insert(6, ("Original abstract", paper.abstract))
+    return rows
 
 
 def _text_block(idx: int, title: str, rows: list[tuple[str, str]]) -> list[str]:
@@ -67,6 +69,7 @@ def render_reports(
     method_label: str,
     empty_message: str | None = None,
     history_note: str | None = None,
+    include_paper_abstract: bool = True,
 ) -> tuple[str, str, str]:
     profile_text = compact_text(research_profile, 700)
 
@@ -107,7 +110,7 @@ def render_reports(
         markdown_lines.append(message)
 
     for idx, rec in enumerate(recommendations, start=1):
-        rows = _rec_rows(rec)
+        rows = _rec_rows(rec, include_paper_abstract=include_paper_abstract)
         text_lines.extend(_text_block(idx, rec.paper.title, rows))
         html_blocks.append(_html_block(rec.paper.title, rows))
         markdown_lines.extend(_md_block(idx, rec.paper.title, rows))
