@@ -13,9 +13,10 @@ Each recommended paper includes:
 
 - a relevance score
 - matched concepts from your research profile
-- a short English summary
+- the original arXiv abstract
+- a short English LLM summary
 - a Chinese title
-- a Chinese abstract summary
+- a Chinese LLM summary
 - a short explanation of why it matches your interests
 - a `review_status` field for manual tracking
 
@@ -273,7 +274,7 @@ python app.py --dbg
 - Recommended papers are grouped into one daily JSON file under `recommended-papers/<yymm>/<dd>.json`.
 - Unrecommended papers are grouped into one daily JSON file under `not-recommended-papers/<yymm>/<dd>.json`.
 - Each stored JSON uses the canonical arXiv identifier in `paper_id`, not the full arXiv URL.
-- Recommended papers are stored with full recommendation detail.
+- Recommended papers are stored with full recommendation detail, including `paper_abstract`, `llm_summary`, and `summary_zh`.
 - Recommended papers also include `review_status`, which starts as `unchecked`.
 - Allowed `review_status` values are `rejected`, `uninterested`, `unchecked`, `interested`, and `readed`.
 - Nonrecommended paper entries store only `paper_id`, `title`, and `url`.

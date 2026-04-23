@@ -11,7 +11,44 @@ from utils.runtime import debug_log, run_with_retries, str_env
 from utils.text import compact_text, extract_json_object, normalize_str_list, summarize_abstract
 
 
-def recommend_with_llm_batch(
+def _pick_text(item: dict[str, object], keys: tuple[str, ...], limit: int, fallback: str = "") -> str:
+    for key in keys:
+        value = compact_text(str(item.get(key, "")).strip(), limit)
+        if value:
+            return value
+    return fallback
+
+
+def _build_rec(item: dict[str, object], paper: Paper) -> Recommendation:
+    raw_score = item.get("score", 0)
+    try:
+        score = float(raw_score)
+    except (TypeError, ValueError):
+        score = 0.0
+
+    matched = normalize_str_list(item.get("matched_interests", []))
+    llm_summary = _pick_text(item, ("llm_summary", "summary"), 420, summarize_abstract(paper.abstract))
+
+    reason = _pick_text(item, ("reason",), 280)
+    if not reason:
+        hint = ", ".join(matched[:3]) if matched else "profile overlap"
+        reason = f"Connected to your research profile through {hint}."
+
+    title_zh = _pick_text(item, ("title_zh",), 280, f"\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u6807\u9898\uff09{paper.title}")
+    summary_zh = _pick_text(item, ("summary_zh", "abstract_zh"), 520, "\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u603b\u7ed3\uff09")
+
+    return Recommendation(
+        paper=paper,
+        title_zh=title_zh,
+        summary_zh=summary_zh,
+        score=score,
+        matched_interests=matched,
+        llm_summary=llm_summary,
+        reason=reason,
+    )
+
+
+def _recommend_batch(
     papers: list[Paper],
     research_profile: str,
     llm_model: str,
@@ -38,7 +75,7 @@ def recommend_with_llm_batch(
             "categories": paper.categories,
             "published": paper.published.isoformat(),
             "link": paper.link,
-            "abstract": compact_text(paper.summary, 1100),
+            "abstract": compact_text(paper.abstract, 1100),
         }
         for paper in papers
     ]
@@ -58,9 +95,9 @@ def recommend_with_llm_batch(
                     "score": "number between 0 and 100",
                     "matched_interests": ["matched concepts from research profile"],
                     "reason": "explicit connection between this paper and the research profile",
-                    "summary": "2-sentence summary in English",
+                    "llm_summary": "2-sentence summary in English",
                     "title_zh": "Chinese title (Simplified Chinese)",
-                    "abstract_zh": "Chinese abstract summary in 2-3 sentences (Simplified Chinese)",
+                    "summary_zh": "Chinese summary in 2-3 sentences (Simplified Chinese)",
                 }
             ]
         },
@@ -69,7 +106,7 @@ def recommend_with_llm_batch(
             "Return every relevant paper in this batch, not just top results.",
             "Exclude papers that are not relevant to the research profile.",
             "The reason must explicitly mention how the paper connects to the research profile.",
-            "title_zh and abstract_zh must be written in Simplified Chinese.",
+            "title_zh and summary_zh must be written in Simplified Chinese.",
         ],
     }
 
@@ -120,7 +157,7 @@ def recommend_with_llm_batch(
         action_name=f"Recommendation LLM request{label}",
     )
 
-    recommendations: list[Recommendation] = []
+    recs: list[Recommendation] = []
     seen_ids: set[str] = set()
 
     for item in raw_recommended:
@@ -133,46 +170,13 @@ def recommend_with_llm_batch(
 
         paper = paper_map[paper_id]
         seen_ids.add(paper_id)
+        recs.append(_build_rec(item, paper))
 
-        raw_score = item.get("score", 0)
-        try:
-            score = float(raw_score)
-        except (TypeError, ValueError):
-            score = 0.0
-
-        matched_interests = normalize_str_list(item.get("matched_interests", []))
-
-        summary = compact_text(str(item.get("summary", "")).strip(), 420)
-        if not summary:
-            summary = summarize_abstract(paper.summary)
-
-        reason = compact_text(str(item.get("reason", "")).strip(), 280)
-        if not reason:
-            hint = ", ".join(matched_interests[:3]) if matched_interests else "profile overlap"
-            reason = f"Connected to your research profile through {hint}."
-        title_zh = compact_text(str(item.get("title_zh", "")).strip(), 280)
-        if not title_zh:
-            title_zh = f"\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u6807\u9898\uff09{paper.title}"
-        abstract_zh = compact_text(str(item.get("abstract_zh", "")).strip(), 520)
-        if not abstract_zh:
-            abstract_zh = "\uff08\u672a\u63d0\u4f9b\u4e2d\u6587\u6458\u8981\uff09"
-        recommendations.append(
-            Recommendation(
-                paper=paper,
-                title_zh=title_zh,
-                abstract_zh=abstract_zh,
-                score=score,
-                matched_interests=matched_interests,
-                summary=summary,
-                reason=reason,
-            )
-        )
-
-    debug_log(dbg, f"Recommendation request{label} returned {len(recommendations)} recommendation(s).")
-    return recommendations
+    debug_log(dbg, f"Recommendation request{label} returned {len(recs)} recommendation(s).")
+    return recs
 
 
-def recommend_with_llm(
+def _recommend_all(
     papers: list[Paper],
     research_profile: str,
     llm_model: str,
@@ -192,7 +196,7 @@ def recommend_with_llm(
         batch = ordered[offset : offset + batch_size]
         batch_number = (offset // batch_size) + 1
         collected.extend(
-            recommend_with_llm_batch(
+            _recommend_batch(
                 papers=batch,
                 research_profile=research_profile,
                 llm_model=llm_model,
@@ -228,7 +232,7 @@ def recommend_and_summarize(
 
     try:
         debug_log(dbg, f"Running recommendation pipeline for {len(papers)} fetched paper(s).")
-        recommendations = recommend_with_llm(
+        recommendations = _recommend_all(
             papers=papers,
             research_profile=research_profile,
             llm_model=llm_model,

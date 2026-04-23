@@ -16,11 +16,22 @@ ARXIV_ANNOUNCEMENT_HOUR = 20
 ARXIV_SUBMISSION_CUTOFF_HOUR = 14
 
 
-def normalize_research_profile(profile_raw: str) -> str:
-    return " ".join(profile_raw.split())
+def _day_edge(base: dt.datetime, for_end: bool) -> dt.datetime:
+    if for_end:
+        return base.replace(hour=23, minute=59, second=59, microsecond=0)
+    return base.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def parse_user_datetime(
+def _parse_formats(raw: str, formats: list[str], tz: ZoneInfo) -> dt.datetime | None:
+    for fmt in formats:
+        try:
+            return dt.datetime.strptime(raw, fmt).replace(tzinfo=tz)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_time(
     raw: str | None,
     tz: ZoneInfo,
     now_local: dt.datetime,
@@ -37,19 +48,11 @@ def parse_user_datetime(
     if low in {"now", "right now"}:
         return now_local
     if low == "today":
-        return now_local.replace(hour=23, minute=59, second=59, microsecond=0) if for_end else now_local.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        return _day_edge(now_local, for_end)
     if low == "yesterday":
-        base = now_local - dt.timedelta(days=1)
-        return base.replace(hour=23, minute=59, second=59, microsecond=0) if for_end else base.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        return _day_edge(now_local - dt.timedelta(days=1), for_end)
     if low == "tomorrow":
-        base = now_local + dt.timedelta(days=1)
-        return base.replace(hour=23, minute=59, second=59, microsecond=0) if for_end else base.replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        return _day_edge(now_local + dt.timedelta(days=1), for_end)
 
     cleaned = re.sub(
         r"^(from|since|start|starting|begin|beginning|to|until|till|end|ending)\s+",
@@ -84,12 +87,9 @@ def parse_user_datetime(
         "%b %d %Y %H:%M",
         "%B %d %Y %H:%M",
     ]
-    for fmt in datetime_formats:
-        try:
-            parsed = dt.datetime.strptime(cleaned, fmt)
-            return parsed.replace(tzinfo=tz)
-        except ValueError:
-            continue
+    parsed = _parse_formats(cleaned, datetime_formats, tz)
+    if parsed is not None:
+        return parsed
 
     date_formats = [
         "%Y-%m-%d",
@@ -101,20 +101,14 @@ def parse_user_datetime(
         "%b %d %Y",
         "%B %d %Y",
     ]
-    for fmt in date_formats:
-        try:
-            parsed_date = dt.datetime.strptime(cleaned, fmt)
-            parsed = parsed_date.replace(tzinfo=tz)
-            if for_end:
-                parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=0)
-            return parsed
-        except ValueError:
-            continue
+    parsed = _parse_formats(cleaned, date_formats, tz)
+    if parsed is not None:
+        return _day_edge(parsed, for_end)
 
     return None
 
 
-def normalize_times_with_llm(
+def _llm_parse_window(
     start_raw: str | None,
     end_raw: str | None,
     tz_name: str,
@@ -217,7 +211,7 @@ def normalize_times_with_llm(
     return normalized_start, normalized_end
 
 
-def compute_latest_announced_arxiv_window(
+def _latest_arxiv_window(
     now_utc: dt.datetime | None = None,
 ) -> tuple[dt.datetime, dt.datetime]:
     if now_utc is None:
@@ -282,7 +276,7 @@ def compute_time_window(
     llm_end_raw: str | None = None
     if (start_raw and start_raw.strip()) or (end_raw and end_raw.strip()):
         try:
-            llm_start_raw, llm_end_raw = normalize_times_with_llm(
+            llm_start_raw, llm_end_raw = _llm_parse_window(
                 start_raw=start_raw,
                 end_raw=end_raw,
                 tz_name=tz_name,
@@ -297,11 +291,11 @@ def compute_time_window(
     start_source = llm_start_raw if llm_start_raw is not None else start_raw
     end_source = llm_end_raw if llm_end_raw is not None else end_raw
 
-    start_local = parse_user_datetime(start_source, tz, now_local, for_end=False)
-    end_local = parse_user_datetime(end_source, tz, now_local, for_end=True)
+    start_local = _parse_time(start_source, tz, now_local, for_end=False)
+    end_local = _parse_time(end_source, tz, now_local, for_end=True)
 
     if start_local is None and end_local is None:
-        start_utc, end_utc = compute_latest_announced_arxiv_window()
+        start_utc, end_utc = _latest_arxiv_window()
         debug_log(
             dbg,
             (

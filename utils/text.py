@@ -4,8 +4,12 @@ import json
 import re
 
 
+def _clean(text: str) -> str:
+    return " ".join(text.split())
+
+
 def summarize_abstract(text: str, max_sentences: int = 2, max_chars: int = 380) -> str:
-    clean = " ".join(text.split())
+    clean = _clean(text)
     if not clean:
         return "No abstract available."
     sentences = re.split(r"(?<=[.!?])\s+", clean)
@@ -18,7 +22,7 @@ def summarize_abstract(text: str, max_sentences: int = 2, max_chars: int = 380) 
 
 
 def compact_text(text: str, max_chars: int) -> str:
-    clean = " ".join(text.split())
+    clean = _clean(text)
     if len(clean) <= max_chars:
         return clean
     return clean[: max_chars - 3].rstrip() + "..."

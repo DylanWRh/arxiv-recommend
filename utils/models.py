@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class Paper:
     paper_id: str
     title: str
-    summary: str
+    abstract: str
     authors: list[str]
     categories: list[str]
     published: dt.datetime
@@ -20,8 +20,8 @@ class Paper:
 class Recommendation:
     paper: Paper
     title_zh: str
-    abstract_zh: str
+    summary_zh: str
     score: float
     matched_interests: list[str]
-    summary: str
+    llm_summary: str
     reason: str

@@ -15,6 +15,50 @@ def format_score(score: float) -> str:
     return f"{score:.2f}"
 
 
+def _rec_rows(rec: Recommendation) -> list[tuple[str, str]]:
+    paper = rec.paper
+    authors = ", ".join(paper.authors) if paper.authors else "Unknown authors"
+    matched = ", ".join(rec.matched_interests) if rec.matched_interests else "None"
+    return [
+        ("Chinese title", rec.title_zh),
+        ("Authors", authors),
+        ("Published", paper.published.isoformat()),
+        ("Relevance score", format_score(rec.score)),
+        ("Matched concepts", matched),
+        ("Why selected", rec.reason),
+        ("Original abstract", paper.abstract),
+        ("LLM summary", rec.llm_summary),
+        ("Chinese summary", rec.summary_zh),
+        ("URL", paper.link),
+    ]
+
+
+def _text_block(idx: int, title: str, rows: list[tuple[str, str]]) -> list[str]:
+    lines = [f"{idx}. {title}"]
+    lines.extend(f"   {label}: {value}" for label, value in rows)
+    lines.append("")
+    return lines
+
+
+def _html_row(label: str, value: str) -> str:
+    if label == "URL":
+        link = escape(value)
+        return f"{escape(label)}: <a href='{link}'>{link}</a>"
+    return f"{escape(label)}: {escape(value)}"
+
+
+def _html_block(title: str, rows: list[tuple[str, str]]) -> str:
+    body = "<br>".join(_html_row(label, value) for label, value in rows)
+    return f"<li><p><strong>{escape(title)}</strong><br>{body}</p></li>"
+
+
+def _md_block(idx: int, title: str, rows: list[tuple[str, str]]) -> list[str]:
+    lines = [f"## {idx}. {title}"]
+    lines.extend(f"- {label}: {value}" for label, value in rows)
+    lines.append("")
+    return lines
+
+
 def render_reports(
     start_utc: dt.datetime,
     end_utc: dt.datetime,
@@ -62,64 +106,17 @@ def render_reports(
         html_blocks.append(f"<li>{escape(message)}</li>")
         markdown_lines.append(message)
 
-    for idx, recommendation in enumerate(recommendations, start=1):
-        paper = recommendation.paper
-        authors_text = ", ".join(paper.authors) if paper.authors else "Unknown authors"
-        matched_text = ", ".join(recommendation.matched_interests) if recommendation.matched_interests else "None"
-        score_text = format_score(recommendation.score)
-
-        text_lines.extend(
-            [
-                f"{idx}. {paper.title}",
-                f"   Chinese title: {recommendation.title_zh}",
-                f"   Authors: {authors_text}",
-                f"   Published: {paper.published.isoformat()}",
-                f"   Relevance score: {score_text}",
-                f"   Matched concepts: {matched_text}",
-                f"   Why selected: {recommendation.reason}",
-                f"   Summary: {recommendation.summary}",
-                f"   Chinese abstract: {recommendation.abstract_zh}",
-                f"   URL: {paper.link}",
-                "",
-            ]
-        )
-
-        html_blocks.append(
-            "<li>"
-            f"<p><strong>{escape(paper.title)}</strong><br>"
-            f"Chinese title: {escape(recommendation.title_zh)}<br>"
-            f"Authors: {escape(authors_text)}<br>"
-            f"Published: {escape(paper.published.isoformat())}<br>"
-            f"Relevance score: {escape(score_text)}<br>"
-            f"Matched concepts: {escape(matched_text)}<br>"
-            f"Why selected: {escape(recommendation.reason)}<br>"
-            f"Summary: {escape(recommendation.summary)}<br>"
-            f"Chinese abstract: {escape(recommendation.abstract_zh)}<br>"
-            f"URL: <a href='{escape(paper.link)}'>{escape(paper.link)}</a></p>"
-            "</li>"
-        )
-
-        markdown_lines.extend(
-            [
-                f"## {idx}. {paper.title}",
-                f"- Chinese title: {recommendation.title_zh}",
-                f"- Authors: {authors_text}",
-                f"- Published: {paper.published.isoformat()}",
-                f"- Relevance score: {score_text}",
-                f"- Matched concepts: {matched_text}",
-                f"- Why selected: {recommendation.reason}",
-                f"- Summary: {recommendation.summary}",
-                f"- Chinese abstract: {recommendation.abstract_zh}",
-                f"- URL: {paper.link}",
-                "",
-            ]
-        )
+    for idx, rec in enumerate(recommendations, start=1):
+        rows = _rec_rows(rec)
+        text_lines.extend(_text_block(idx, rec.paper.title, rows))
+        html_blocks.append(_html_block(rec.paper.title, rows))
+        markdown_lines.extend(_md_block(idx, rec.paper.title, rows))
 
     html_blocks.append("</ol>")
     return "\n".join(text_lines), "\n".join(html_blocks), "\n".join(markdown_lines)
 
 
-def build_report_filename(
+def _report_name(
     start_utc: dt.datetime,
     end_utc: dt.datetime,
     generated_utc: dt.datetime,
@@ -132,17 +129,10 @@ def build_report_filename(
     )
 
 
-def default_output_path(start_utc: dt.datetime, end_utc: dt.datetime) -> str:
-    generated_utc = dt.datetime.now(dt.timezone.utc)
-    uid = uuid.uuid4().hex[:8]
-    filename = build_report_filename(start_utc, end_utc, generated_utc, uid)
-    return os.path.join("reports", filename)
-
-
 def resolve_output_path(raw_path: str, start_utc: dt.datetime, end_utc: dt.datetime) -> str:
     generated_utc = dt.datetime.now(dt.timezone.utc)
     uid = uuid.uuid4().hex[:8]
-    auto_filename = build_report_filename(start_utc, end_utc, generated_utc, uid)
+    auto_filename = _report_name(start_utc, end_utc, generated_utc, uid)
 
     cleaned = raw_path.strip()
     if not cleaned:

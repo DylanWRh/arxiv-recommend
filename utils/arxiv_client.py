@@ -26,7 +26,7 @@ ARXIV_REQUEST_HEADERS = {
 _last_arxiv_request_monotonic = 0.0
 
 
-def datetime_to_arxiv(value: dt.datetime) -> str:
+def _arxiv_ts(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).strftime("%Y%m%d%H%M")
 
 
@@ -88,7 +88,7 @@ def _compute_arxiv_retry_delay(response: requests.Response, attempt: int) -> flo
     return _compute_arxiv_backoff_delay(attempt)
 
 
-def fetch_arxiv_batch(
+def _fetch_batch(
     params: dict[str, str | int],
     dbg: bool = False,
     max_attempts: int = ARXIV_MAX_RETRY_ATTEMPTS,
@@ -174,7 +174,7 @@ def fetch_arxiv_papers(
     if max_results <= 0:
         return []
 
-    search_query = f"submittedDate:[{datetime_to_arxiv(start_utc)} TO {datetime_to_arxiv(end_utc)}]"
+    search_query = f"submittedDate:[{_arxiv_ts(start_utc)} TO {_arxiv_ts(end_utc)}]"
     collected: list[Paper] = []
     start_idx = 0
     page_size = min(ARXIV_PAGE_SIZE, max_results)
@@ -196,7 +196,7 @@ def fetch_arxiv_papers(
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }
-        papers = parse_arxiv_feed(fetch_arxiv_batch(params, dbg=dbg))
+        papers = _parse_feed(_fetch_batch(params, dbg=dbg))
         if not papers:
             break
         collected.extend(papers)
@@ -208,14 +208,14 @@ def fetch_arxiv_papers(
     return collected
 
 
-def parse_arxiv_feed(feed_xml: str) -> list[Paper]:
+def _parse_feed(feed_xml: str) -> list[Paper]:
     root = ET.fromstring(feed_xml)
     entries = root.findall("atom:entry", ATOM_NS)
     papers: list[Paper] = []
     for entry in entries:
         paper_id = entry.findtext("atom:id", default="", namespaces=ATOM_NS).strip()
         title = " ".join(entry.findtext("atom:title", default="", namespaces=ATOM_NS).split())
-        summary = " ".join(entry.findtext("atom:summary", default="", namespaces=ATOM_NS).split())
+        abstract = " ".join(entry.findtext("atom:summary", default="", namespaces=ATOM_NS).split())
         authors = [
             author.findtext("atom:name", default="", namespaces=ATOM_NS).strip()
             for author in entry.findall("atom:author", ATOM_NS)
@@ -229,13 +229,13 @@ def parse_arxiv_feed(feed_xml: str) -> list[Paper]:
         updated_raw = entry.findtext("atom:updated", default="", namespaces=ATOM_NS).strip()
         published = dt.datetime.fromisoformat(published_raw.replace("Z", "+00:00"))
         updated = dt.datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
-        link = extract_html_link(entry) or paper_id
+        link = _html_link(entry) or paper_id
 
         papers.append(
             Paper(
                 paper_id=paper_id,
                 title=title,
-                summary=summary,
+                abstract=abstract,
                 authors=authors,
                 categories=categories,
                 published=published,
@@ -246,7 +246,7 @@ def parse_arxiv_feed(feed_xml: str) -> list[Paper]:
     return papers
 
 
-def extract_html_link(entry: ET.Element) -> str:
+def _html_link(entry: ET.Element) -> str:
     for link in entry.findall("atom:link", ATOM_NS):
         if link.attrib.get("type") == "text/html":
             return link.attrib.get("href", "").strip()

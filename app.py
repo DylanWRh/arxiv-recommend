@@ -12,14 +12,14 @@ from utils.database import (
 )
 from utils.emailing import build_email, send_email
 from utils.llm_recommender import recommend_and_summarize
-from utils.rendering import default_output_path, render_reports, save_report
+from utils.rendering import render_reports, save_report
 from utils.runtime import bool_env, debug_log, int_env, load_dotenv, str_env
-from utils.time_window import compute_time_window, normalize_research_profile
+from utils.time_window import compute_time_window
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fetch new arXiv papers, recommend by research profile, summarize, and email/save results."
+        description="Fetch new arXiv papers, recommend by research profile, generate LLM summaries, and email/save results."
     )
     parser.add_argument(
         "--research-profile",
@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--llm-model",
-        help="LLM model used for recommendation and summarization.",
+        help="LLM model used for recommendation and generated summaries.",
         default=str_env("OPENAI_MODEL", "gpt-4o-mini"),
     )
     parser.add_argument(
@@ -119,7 +119,7 @@ def main() -> int:
     args = parse_args()
     debug_log(args.dbg, "Loaded configuration and parsed CLI arguments.")
 
-    research_profile = normalize_research_profile(args.research_profile)
+    research_profile = " ".join(args.research_profile.split())
     if not research_profile:
         print("No research profile provided. Set --research-profile or RESEARCH_PROFILE.", file=sys.stderr)
         return 1
@@ -222,9 +222,8 @@ def main() -> int:
 
     saved_path: str | None = None
     if args.save_report:
-        output_path = args.output or default_output_path(start_utc, end_utc)
         try:
-            saved_path = save_report(output_path, markdown_report, start_utc, end_utc)
+            saved_path = save_report(args.output, markdown_report, start_utc, end_utc)
         except Exception as exc:  # noqa: BLE001
             print(f"Failed to save report: {exc}", file=sys.stderr)
             return 1
