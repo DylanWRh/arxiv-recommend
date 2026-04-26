@@ -20,6 +20,16 @@ def int_env(name: str, default: int) -> int:
         return default
 
 
+def float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def str_env(name: str, default: str = "") -> str:
     raw = os.getenv(name)
     if raw is None:

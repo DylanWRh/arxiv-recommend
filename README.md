@@ -67,6 +67,7 @@ RECOMMENDATIONS_STATE_DIR=./data
 | `OUTPUT_PATH` | No | File or directory for saved Markdown reports |
 | `EMAIL_TO` | No | Default recipient when email is enabled |
 | `RECOMMENDATIONS_STATE_DIR` | If `SAVE_TO_DB=true` | Root directory for JSON state files |
+| `RECOMMENDATION_SCORE_THRESHOLD` | No | Minimum estimated score a paper must meet to appear in reports, email, and saved recommendations; default `80` |
 | `OPENAI_MODEL` | No | Main recommendation model |
 | `TIME_PARSE_MODEL` | No | Model used to normalize flexible time input |
 | `OPENAI_BASE_URL` | No | Base URL for an OpenAI-compatible provider |
@@ -87,6 +88,7 @@ Notes:
 - `.env.example` defaults to an OpenRouter-style base URL. For OpenAI directly, use `OPENAI_BASE_URL=https://api.openai.com/v1`.
 - `.env.example` also defaults to Gmail SMTP with STARTTLS.
 - For Gmail, `SMTP_PASS` should be a Google App Password.
+- Set `RECOMMENDATION_SCORE_THRESHOLD` above `0` to send only papers whose estimated score is greater than or equal to that value.
 
 ## Usage
 
@@ -177,4 +179,5 @@ If you want a different run time, edit the workflow `cron` schedule in `.github/
 - Local defaults are `SAVE_REPORT=true`, `SEND_EMAIL=false`, and `SAVE_TO_DB=false`.
 - If no papers are found, the report says so directly.
 - If no papers are recommended, the report says so directly.
+- When `RECOMMENDATION_SCORE_THRESHOLD` is set, only papers with scores greater than or equal to that value are included in reports, email, and recommended-state records.
 - If the LLM request fails, the report is still generated without recommendations.

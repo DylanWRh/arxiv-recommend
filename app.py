@@ -13,7 +13,7 @@ from utils.database import (
 from utils.emailing import build_email, send_email
 from utils.llm_recommender import recommend_and_summarize
 from utils.rendering import render_reports, save_report
-from utils.runtime import bool_env, debug_log, int_env, load_dotenv, str_env
+from utils.runtime import bool_env, debug_log, float_env, int_env, load_dotenv, str_env
 from utils.time_window import compute_time_window
 
 
@@ -102,6 +102,15 @@ def parse_args() -> argparse.Namespace:
         help="Timeout (seconds) for LLM API requests.",
     )
     parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=float_env("RECOMMENDATION_SCORE_THRESHOLD", 80.0),
+        help=(
+            "Minimum estimated recommendation score required for a paper to be included "
+            "in reports, email, and saved recommendations."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Do everything except SMTP send. If email sending is enabled, print the MIME email instead.",
@@ -179,9 +188,9 @@ def main() -> int:
 
     fetched_paper_count = len(papers)
     papers, skipped_saved_count = exclude_saved_papers(papers, saved_paper_ids)
-    history_note: str | None = None
+    history_notes: list[str] = []
     if skipped_saved_count:
-        history_note = (
+        history_notes.append(
             f"Skipped {skipped_saved_count} paper(s) that were already saved in the recommendations state store."
         )
         debug_log(
@@ -192,14 +201,20 @@ def main() -> int:
             ),
         )
 
+    score_threshold = max(0.0, args.score_threshold)
+    if score_threshold > 0:
+        history_notes.append(f"Applied recommendation score threshold: {score_threshold:g}+.")
+
     recommendations, method_label, empty_message = recommend_and_summarize(
         papers=papers,
         research_profile=research_profile,
         llm_model=args.llm_model,
         llm_batch_size=llm_batch_size,
         llm_timeout=llm_timeout,
+        score_threshold=score_threshold,
         dbg=args.dbg,
     )
+    history_note = " ".join(history_notes) if history_notes else None
     debug_log(
         args.dbg,
         f"Initial recommendation stage completed with {len(recommendations)} item(s) using method={method_label}.",

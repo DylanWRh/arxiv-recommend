@@ -219,12 +219,32 @@ def _recommend_all(
     return output
 
 
+def _filter_recommendations_by_score(
+    recommendations: list[Recommendation],
+    score_threshold: float,
+    dbg: bool = False,
+) -> list[Recommendation]:
+    if score_threshold <= 0:
+        return recommendations
+
+    filtered = [recommendation for recommendation in recommendations if recommendation.score >= score_threshold]
+    debug_log(
+        dbg,
+        (
+            f"Applied score threshold {score_threshold:g}; "
+            f"kept {len(filtered)} of {len(recommendations)} recommendation(s)."
+        ),
+    )
+    return filtered
+
+
 def recommend_and_summarize(
     papers: list[Paper],
     research_profile: str,
     llm_model: str,
     llm_batch_size: int,
     llm_timeout: int,
+    score_threshold: float = 0.0,
     dbg: bool = False,
 ) -> tuple[list[Recommendation], str, str | None]:
     if not papers:
@@ -232,7 +252,7 @@ def recommend_and_summarize(
 
     try:
         debug_log(dbg, f"Running recommendation pipeline for {len(papers)} fetched paper(s).")
-        recommendations = _recommend_all(
+        all_recommendations = _recommend_all(
             papers=papers,
             research_profile=research_profile,
             llm_model=llm_model,
@@ -240,9 +260,20 @@ def recommend_and_summarize(
             llm_timeout=llm_timeout,
             dbg=dbg,
         )
+        recommendations = _filter_recommendations_by_score(
+            all_recommendations,
+            score_threshold,
+            dbg=dbg,
+        )
         empty_message = None
         if not recommendations:
-            empty_message = "No relevant papers were recommended in this time window."
+            if all_recommendations and score_threshold > 0:
+                empty_message = (
+                    "No papers met the minimum recommendation score threshold of "
+                    f"{score_threshold:g} in this time window."
+                )
+            else:
+                empty_message = "No relevant papers were recommended in this time window."
         return recommendations, "LLM", empty_message
     except Exception as exc:  # noqa: BLE001
         print(f"LLM recommendation failed: {exc}.", file=sys.stderr)
